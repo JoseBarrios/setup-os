@@ -6,6 +6,7 @@ cd ~/OSSetup
 brew update
 brew doctor
 brew install CMake
+brew install gpg
 brew install git
 brew install node
 # Install n, node version manager
