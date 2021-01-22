@@ -9,6 +9,7 @@ brew install CMake
 brew install gpg
 brew install git
 brew install node
+brew install rg
 brew upgrade gnupg
 brew install pinentry-mac
 killall gpg-agent
