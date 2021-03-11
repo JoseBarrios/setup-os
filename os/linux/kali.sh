@@ -11,9 +11,6 @@ sudo apt full-upgrade -y
 # Assumes python and pip are installed
 python -m pip install --user ansible
 
-# Configure basic tools
-sudo apt install node
-
 # Code repo
 sudo apt install git
 
