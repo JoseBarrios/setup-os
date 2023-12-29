@@ -1,8 +1,10 @@
 mkdir ~/OSSetup
 cd ~/OSSetup
 
-#install Brew
-/usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+# Brew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+(echo; echo 'eval "$(/usr/local/bin/brew shellenv)"') >> /Users/jbarrios/.zprofile
+eval "$(/usr/local/bin/brew shellenv)"
 brew update
 brew doctor
 brew install CMake
@@ -12,10 +14,15 @@ brew install git
 
 # Linters
 brew install yamllint
-brew install cfn-lint # cloudfront
+
+# CloudFront
+brew install cfn-lint 
 
 brew install node
+
+# RipGrep
 brew install rg
+
 brew install gnupg
 brew install pinentry-mac
 git config --global gpg.program gpg2
@@ -29,9 +36,11 @@ git config --global merge.conflictstyle diff3
 git config --global mergetool.prompt false
 git config --global pull.rebase false
 
-# Install n, node version manager
-npm install n -g
-sudo n lts
+git config --global user.name "Jose Barrios"
+git config --global user.email github@barrios.io
+
+# Install Node version manager
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 
 # Dependency of vim-preview
 sudo gem install bluecloth
@@ -41,14 +50,11 @@ git clone https://github.com/altercation/solarized.git
 open ~/OSSetup/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized\ Dark\ xterm-256color.terminal
 
 #Install VIM
-git clone https://github.com/JoseBarrios/vim-dots.git
-mkdir ~/.vim/undo
-cd vim-dots
-sh ./unpack.sh
-cd ..
+/bin/bash ../../app/vim/vim-setup.sh
+
 
 # Fonts and icons
-git clone git@github.com:ryanoasis/nerd-fonts.git
+git clone https://github.com/ryanoasis/nerd-fonts.git
 cd nerd-fonts && ./install.sh
 cd ..
 
