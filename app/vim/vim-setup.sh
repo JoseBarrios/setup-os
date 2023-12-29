@@ -2,7 +2,7 @@
 #################
 #   VARIABLES   #
 #################
-files="vimrc vim"   # list of files/folders to symlink in homedir
+files=".vimrc vim"   # list of files/folders to symlink in homedir
 dir=${PWD}/app         	# dotfiles directory
 vim=$dir/vim      	# vim settings directory
 olddir=$vim/old   	# old dotfiles backup directory
@@ -44,6 +44,7 @@ makeDirectory $vimbundle "git clone https://github.com/gmarik/Vundle.vim.git $vi
 # move any existing dotfiles in homedir to dot_old directory, then create symlinks from the homedir to any files in the ~/dotfiles directory specified in $files
 cd $dir
 for file in $files; do
+    echo $file
     echo "Moving any existing dotfiles from ~ to $olddir"
     mv ~/.$file $olddir/
     echo "Creating symlink to $file in home directory."

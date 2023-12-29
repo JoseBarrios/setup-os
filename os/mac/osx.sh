@@ -12,6 +12,12 @@ brew install vim
 brew install node
 brew install git
 
+# Python version manager
+brew install pyenv
+alias brew='env PATH="${PATH//$(pyenv root)\/shims:/}" brew'
+
+brew tap homebrew/cask-fonts && brew install --cask font-hack-nerd-font
+
 # Linters
 brew install yamllint
 
@@ -49,9 +55,6 @@ sudo gem install bluecloth
 git clone https://github.com/altercation/solarized.git
 open ~/OSSetup/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized\ Dark\ xterm-256color.terminal
 
-#Install VIM
-/bin/bash app/vim/vim-setup.sh
-
 
 # Fonts and icons
 git clone https://github.com/ryanoasis/nerd-fonts.git
@@ -61,3 +64,7 @@ cd ..
 # zsh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 
+#Install VIM
+/bin/bash app/vim/vim-setup.sh
+
+cd ~/.vim/bundle/coc.nvim && npm install
