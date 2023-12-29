@@ -16,7 +16,7 @@ brew install git
 brew install yamllint
 
 # CloudFront
-brew install cfn-lint 
+brew install cfn-lint
 
 brew install node
 
@@ -50,7 +50,7 @@ git clone https://github.com/altercation/solarized.git
 open ~/OSSetup/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized\ Dark\ xterm-256color.terminal
 
 #Install VIM
-/bin/bash ../../app/vim/vim-setup.sh
+/bin/bash app/vim/vim-setup.sh
 
 
 # Fonts and icons

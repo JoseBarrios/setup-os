@@ -1,4 +1,16 @@
 #!/bin/bash
+#################
+#   VARIABLES   #
+#################
+files="vimrc vim"   # list of files/folders to symlink in homedir
+dir=${PWD}/app         	# dotfiles directory
+vim=$dir/vim      	# vim settings directory
+olddir=$vim/old   	# old dotfiles backup directory
+vimcolors=$vim/colors
+vimbackups=$vim/backups
+vimbundle=$vim/bundle
+vimswaps=$vim/swaps
+vimundo=$vim/undo
 
 #################
 #   FUNCTIONS   #
@@ -29,21 +41,6 @@ makeDirectory $vimbackups
 makeDirectory $vimundo
 makeDirectory $vimbundle "git clone https://github.com/gmarik/Vundle.vim.git $vimbundle/Vundle.vim"
 
-# list of files/folders to symlink in homedir
-files="vimrc vim"   	
-# dotfiles directory
-dir=${PWD}         	
-# vim settings directory
-vim=$dir/vim      	
-# old dotfiles backup directory
-olddir=$vim/old   	
-vimcolors=$vim/colors
-vimbackups=$vim/backups
-vimbundle=$vim/bundle
-vimswaps=$vim/swaps
-vimundo=$vim/undo
-
-
 # move any existing dotfiles in homedir to dot_old directory, then create symlinks from the homedir to any files in the ~/dotfiles directory specified in $files
 cd $dir
 for file in $files; do
@@ -52,8 +49,8 @@ for file in $files; do
     echo "Creating symlink to $file in home directory."
     ln -s $dir/$file ~/.$file
     echo "Installing solarized colors for VIM"
-    git clone git://github.com/altercation/vim-colors-solarized.git
-    cp ./vim-colors-solarized/colors/solarized.vim ./vim/colors/
+    git clone https://github.com/altercation/vim-colors-solarized.git
+    cp ./vim-colors-solarized/colors/solarized.vim $vimcolors
     rm -rf vim-colors-solarized
 
 done
@@ -79,8 +76,7 @@ if [ -d "$vimbundle/YouCompleteMe/" ]; then
 fi
 
 # Used by vim-prettier
-npm install --save-dev --save-exact -g prettier
+npm install prettier -g
 
 # used by black
 cd ~/.vim/bundle/black
-git checkout origin/stable -b stable

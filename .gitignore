@@ -1,1 +1,7 @@
 .DS_Store
+*.swp
+
+app/vim/bundle/
+app/vim/colors/
+app/vim/old/
+app/vim/undo/

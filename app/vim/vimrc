@@ -62,8 +62,6 @@ Plugin 'mitermayer/vim-prettier'
 " git clone https://github.com/prettier/vim-prettier ~/.vim/pack/plugins/start/vim-prettier
 " ESLint errors and warnings
 Plugin 'dense-analysis/ale'
-" Solarized as a package
-Plugin 'lifepillar/vim-solarized8'
 " File Treeview
 Plugin 'scrooloose/nerdtree'
 " Treeview + git
@@ -292,7 +290,7 @@ set t_Co=256
 set background=dark
 let g:solarized_termcolors=256
 let g:solarized_termtrans = 1
-colorscheme solarized8
+colorscheme solarized
 " Custom line column colours
 highlight LineNr ctermbg=NONE ctermfg=59
 highlight SignColumn ctermbg=NONE guibg=NONE
