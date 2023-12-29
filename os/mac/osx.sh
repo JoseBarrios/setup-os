@@ -36,7 +36,7 @@ git config --global merge.conflictstyle diff3
 git config --global mergetool.prompt false
 git config --global pull.rebase false
 
-git config --global user.name "Jose Barrios"
+git config --global user.name "JoseBarrios"
 git config --global user.email github@barrios.io
 
 # Install Node version manager
