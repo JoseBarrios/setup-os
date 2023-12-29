@@ -55,6 +55,8 @@ sudo gem install bluecloth
 git clone https://github.com/altercation/solarized.git
 open ~/OSSetup/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized\ Dark\ xterm-256color.terminal
 
+# View hidden files by default
+defaults write com.apple.finder AppleShowAllFiles -bool true
 
 # Fonts and icons
 git clone https://github.com/ryanoasis/nerd-fonts.git
