@@ -645,6 +645,40 @@ fi
 verify_dir "$SETUP_HOME/solarized"
 
 ###########################
+#   TERMINAL FONT         #
+###########################
+# Set Terminal.app's font to Hack Nerd Font Mono so vim-devicons and
+# powerline glyphs render correctly. The font must already be installed
+# (handled by the Fonts section above).
+echo "==> Configuring Terminal.app font..."
+
+TERMINAL_PROFILE="Solarized Dark xterm-256color"
+TERMINAL_PLIST="$HOME/Library/Preferences/com.apple.Terminal.plist"
+
+# Only set the font if the profile exists in the Terminal plist.
+if /usr/libexec/PlistBuddy -c "Print ':Window Settings:${TERMINAL_PROFILE}:Font'" "$TERMINAL_PLIST" &>/dev/null; then
+    # Use Swift to create an archived NSFont object (the format Terminal.app expects)
+    # and write it to a temp file, then import it into the plist via PlistBuddy.
+    FONT_TMP="$(mktemp)"
+    swift -e "
+import Cocoa
+guard let font = NSFont(name: \"HackNFM-Regular\", size: 14) else { exit(1) }
+let data = try NSKeyedArchiver.archivedData(withRootObject: font, requiringSecureCoding: false)
+try data.write(to: URL(fileURLWithPath: \"${FONT_TMP}\"))
+" 2>/dev/null
+
+    if [ -s "$FONT_TMP" ]; then
+        /usr/libexec/PlistBuddy -c "Import ':Window Settings:${TERMINAL_PROFILE}:Font' ${FONT_TMP}" "$TERMINAL_PLIST"
+        echo "  Set Terminal.app font to Hack Nerd Font Mono (14pt)"
+    else
+        echo "  [WARN] Could not create font data — is Hack Nerd Font installed?"
+    fi
+    rm -f "$FONT_TMP"
+else
+    echo "  [WARN] Terminal profile '${TERMINAL_PROFILE}' not found — skipping font config"
+fi
+
+###########################
 #   FINDER CONFIG         #
 ###########################
 # Configure macOS Finder to show hidden files (dotfiles) by default.
