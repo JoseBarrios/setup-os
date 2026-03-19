@@ -140,6 +140,13 @@ Plugin 'haya14busa/incsearch.vim'
 "Plugin 'rizzatti/dash.vim'
 
 " Tagline Outline
+
+" AI:
+""""""""""""""""""
+" Claude Code — interactive AI assistant inside Vim via floaterm.
+" Requires: claude CLI installed and authenticated.
+" No third-party Vim plugins needed — uses the already-installed floaterm.
+
 " All of your Plugins must be added before the following line
 call vundle#end()            " required
 filetype plugin indent on    " required
@@ -402,6 +409,23 @@ let g:fzf_layout = { 'window': { 'width': 0.9, 'height': 0.6  }  }
 " Floating terminal window
 let g:floaterm_width = 0.90
 let g:floaterm_height = 0.90
+
+" CLAUDE CODE INTEGRATION:
+""------------------------------------------------------------------------
+" Open Claude Code in a floating terminal for interactive AI assistance.
+" <Leader>cc opens a new Claude session in the current working directory.
+" <Leader>cr resumes the most recent Claude conversation (--continue).
+" <Leader>cs sends the visually selected text to Claude as a prompt.
+nnoremap <silent> <Leader>cc :FloatermNew --title=Claude\ Code --autoclose=2 claude<CR>
+nnoremap <silent> <Leader>cr :FloatermNew --title=Claude\ Code --autoclose=2 claude --continue<CR>
+
+" Send visual selection to Claude: yanks selection, opens Claude with it as a prompt.
+" Uses --print for non-interactive single-shot output in a floating terminal.
+vnoremap <silent> <Leader>cs y:FloatermNew --title=Claude\ Code --autoclose=0 claude --print <C-R>"<CR>
+
+" Ask Claude about the current file without leaving Vim.
+" Opens Claude in the project directory with the current filename as context.
+nnoremap <silent> <Leader>cf :FloatermNew --title=Claude\ Code --autoclose=2 claude "Review the file: <C-R>=expand('%:p')<CR>"<CR>
 
 "------------------------------------------------------------------------
 "  PYTHON SETTINGS:

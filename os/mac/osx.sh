@@ -96,12 +96,30 @@ function verify_defaults {
     fi
 }
 
-# Create the temporary working directory for setup artifacts.
-# -p ensures no error if the directory already exists (idempotent).
-mkdir -p ~/OSSetup
+# Wrapper function for brew that strips pyenv shims from PATH.
+# This prevents Homebrew from accidentally using a pyenv-managed Python.
+# Note: shell aliases do not work in non-interactive scripts, so a function is used.
+function brew_safe {
+    if command -v pyenv &>/dev/null; then
+        env PATH="${PATH//$(pyenv root)\/shims:/}" brew "$@"
+    else
+        brew "$@"
+    fi
+}
 
-# Change into the working directory. Exit if it fails (e.g., permission denied).
-cd ~/OSSetup || exit 1
+# Resolve the absolute path to the repository root (two levels up from this script).
+# This ensures all relative paths work regardless of where the script is invoked from.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# All generated artifacts (vim bundles, solarized, etc.) live in ~/setup/ —
+# outside the git repository — to avoid accidentally committing them.
+# -p ensures no error if the directory already exists (idempotent).
+SETUP_HOME="$HOME/setup"
+mkdir -p "$SETUP_HOME"
+
+# Change into the artifacts directory. Exit if it fails (e.g., permission denied).
+cd "$SETUP_HOME" || exit 1
 
 ###########################
 #   MACOS SECURITY        #
@@ -112,19 +130,33 @@ cd ~/OSSetup || exit 1
 # --- FileVault (full-disk encryption) ---
 # FileVault encrypts the entire startup disk to protect data at rest.
 # `fdesetup status` reports "FileVault is On." or "FileVault is Off.".
+# The status check may require root on some configurations, so we guard with || true.
 echo "==> Configuring FileVault (full-disk encryption)..."
-if fdesetup status | grep -q "FileVault is On."; then
+if fdesetup status 2>/dev/null | grep -q "FileVault is On."; then
     # FileVault is already enabled — nothing to do.
     echo "  [PASS] FileVault is already enabled"
 else
     # Enable FileVault with deferred mode: encryption begins at next logout.
     # -defer writes the recovery key to a plist so it can be escrowed later.
     # This requires the current user's password (prompted interactively).
+
+    # Store the recovery key plist in a secure, user-owned location (not /tmp/).
+    # /tmp/ is world-readable and any local user could read the recovery key.
+    FILEVAULT_KEY_DIR="$HOME/.filevault"
+    mkdir -p "$FILEVAULT_KEY_DIR"
+    # Restrict permissions so only the owner can read/write/traverse this directory.
+    chmod 700 "$FILEVAULT_KEY_DIR"
+    FILEVAULT_KEY_PATH="$FILEVAULT_KEY_DIR/recovery_key.plist"
+
     echo "  FileVault is OFF. Enabling with deferred activation..."
-    sudo fdesetup enable -defer /tmp/filevault_recovery_key.plist
+    sudo fdesetup enable -defer "$FILEVAULT_KEY_PATH"
+    # Restrict the recovery key file so only the owner can read it.
+    chmod 600 "$FILEVAULT_KEY_PATH"
     echo "  FileVault will activate on next logout/restart."
-    echo "  IMPORTANT: Save your recovery key from /tmp/filevault_recovery_key.plist"
     echo "  [PASS] FileVault enable command succeeded (pending next logout)"
+
+    # Flag that the recovery key needs to be saved to 1Password after it's set up.
+    FILEVAULT_KEY_PENDING=true
 fi
 
 # --- Lockdown Mode ---
@@ -165,8 +197,13 @@ echo "==> Installing Homebrew..."
 
 # Only install if the `brew` command is not already available.
 if ! command -v brew &>/dev/null; then
-    # Download and run the official Homebrew installer.
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Download the official Homebrew installer to a temp file so we can verify
+    # it downloaded completely before executing it. Piping curl directly to bash
+    # risks executing a truncated or corrupted script.
+    BREW_INSTALLER="$(mktemp)"
+    curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$BREW_INSTALLER"
+    /bin/bash "$BREW_INSTALLER"
+    rm -f "$BREW_INSTALLER"
 fi
 
 # Detect the correct Homebrew prefix based on CPU architecture.
@@ -195,6 +232,35 @@ brew doctor || true
 verify_cmd brew
 
 ###########################
+#   1PASSWORD + CLI       #
+###########################
+# 1Password is a password manager. The CLI (`op`) allows storing and retrieving
+# secrets from the command line, which we use to securely store keys generated
+# during setup (FileVault recovery key, GPG keys, etc.).
+echo "==> Installing 1Password and 1Password CLI..."
+
+# Install the 1Password desktop app (GUI). Idempotent — skips if already installed.
+brew install --cask 1password
+
+# Install the 1Password CLI (`op` command). Idempotent — skips if already installed.
+brew install 1password-cli
+
+# Test: Verify both are available.
+verify_cmd op
+
+# Check if the user is signed in to 1Password CLI.
+# `op account list` returns non-zero or empty output if not signed in.
+# The user must sign in interactively before we can store secrets.
+if op account list 2>/dev/null | grep -q "."; then
+    echo "  [PASS] 1Password CLI is signed in"
+    OP_SIGNED_IN=true
+else
+    echo "  [INFO] 1Password CLI is not signed in."
+    echo "  Run 'eval \$(op signin)' to sign in, then re-run this script to store secrets."
+    OP_SIGNED_IN=false
+fi
+
+###########################
 #   NODE + CLAUDE CODE    #
 ###########################
 # Install Node.js first because Claude Code's installer depends on it.
@@ -210,8 +276,11 @@ verify_cmd npm
 echo "==> Installing Claude Code..."
 # Only install Claude Code if it's not already on the PATH.
 if ! command -v claude &>/dev/null; then
-    # Download and run the official Claude Code installer, then launch initial setup.
-    curl -fsSL https://claude.ai/install.sh | bash && claude
+    # Download the installer to a temp file, verify it downloaded fully, then execute.
+    CLAUDE_INSTALLER="$(mktemp)"
+    curl -fsSL https://claude.ai/install.sh -o "$CLAUDE_INSTALLER"
+    /bin/bash "$CLAUDE_INSTALLER"
+    rm -f "$CLAUDE_INSTALLER"
 fi
 
 # Ensure Claude Code's install directory is on the PATH in future shell sessions.
@@ -254,10 +323,6 @@ echo "==> Installing pyenv..."
 # Install pyenv via Homebrew.
 brew install pyenv
 
-# Create a shell alias that strips pyenv shims from PATH before running brew.
-# This prevents Homebrew from accidentally using a pyenv-managed Python.
-alias brew='env PATH="${PATH//$(pyenv root)\/shims:/}" brew'
-
 # Test: Verify pyenv is available.
 verify_cmd pyenv
 
@@ -270,7 +335,8 @@ echo "==> Installing fonts..."
 
 # Install the Hack Nerd Font as a macOS cask (GUI application/resource).
 # brew install --cask is idempotent — skips if already installed.
-brew install --cask font-hack-nerd-font
+# Use brew_safe to avoid pyenv shim interference.
+brew_safe install --cask font-hack-nerd-font
 
 ###########################
 #   LINTERS               #
@@ -279,13 +345,13 @@ brew install --cask font-hack-nerd-font
 echo "==> Installing linters..."
 
 # yamllint — linter for YAML files (used for CI configs, Kubernetes manifests, etc.).
-brew install yamllint
+brew_safe install yamllint
 
 # Test: Verify yamllint is available.
 verify_cmd yamllint
 
 # CloudFront linter (disabled — uncomment if working with AWS CloudFormation).
-# brew install cfn-lint
+# brew_safe install cfn-lint
 
 ###########################
 #   RIPGREP               #
@@ -294,7 +360,7 @@ verify_cmd yamllint
 echo "==> Installing RipGrep..."
 
 # Install ripgrep via Homebrew.
-brew install rg
+brew_safe install rg
 
 # Test: Verify rg is available.
 verify_cmd rg
@@ -306,17 +372,19 @@ verify_cmd rg
 echo "==> Installing GPG..."
 
 # Install GnuPG (the `gpg` command) via Homebrew.
-brew install gnupg
+brew_safe install gnupg
 
 # Install pinentry-mac — a macOS-native PIN entry dialog for GPG passphrase prompts.
-brew install pinentry-mac
+brew_safe install pinentry-mac
 
 # Test: Verify both tools are available.
 verify_cmd gpg
 verify_cmd pinentry-mac
 
 # Ensure the GnuPG config directory exists before writing to its config files.
+# GnuPG requires 700 permissions on this directory — it warns or fails otherwise.
 mkdir -p ~/.gnupg
+chmod 700 ~/.gnupg
 
 # Tell gpg-agent to use pinentry-mac for passphrase prompts instead of the terminal.
 # Only add the line if it's not already present (idempotent).
@@ -328,6 +396,108 @@ killall gpg-agent 2>/dev/null || true
 
 # Test: Verify the pinentry line is present in the config file.
 verify_line_in_file "pinentry-program ${BREW_PREFIX}/bin/pinentry-mac" ~/.gnupg/gpg-agent.conf
+
+###########################
+#   STORE SECRETS IN 1PW  #
+###########################
+# Now that GPG and 1Password are both installed, store any generated secrets.
+# This section runs after GPG setup so keys exist, and after 1Password setup
+# so the `op` CLI is available.
+echo "==> Storing secrets in 1Password..."
+
+if [ "${OP_SIGNED_IN:-false}" = "true" ]; then
+
+    # --- Store FileVault recovery key ---
+    # The recovery key plist is generated when FileVault is first enabled.
+    # We store it in 1Password and then securely delete the local copy.
+    if [ "${FILEVAULT_KEY_PENDING:-false}" = "true" ] && [ -f "${FILEVAULT_KEY_PATH:-}" ]; then
+        echo "  Saving FileVault recovery key to 1Password..."
+        # Read the recovery key from the deferred plist file.
+        FILEVAULT_KEY_CONTENT="$(cat "$FILEVAULT_KEY_PATH")"
+        # Create a Secure Note in 1Password with the recovery key content.
+        # --vault defaults to the user's Personal vault if not specified.
+        op item create \
+            --category "Secure Note" \
+            --title "FileVault Recovery Key - $(hostname)" \
+            --vault "Personal" \
+            "notesPlain=$FILEVAULT_KEY_CONTENT" 2>/dev/null \
+            && echo "  [PASS] FileVault recovery key saved to 1Password" \
+            || echo "  [FAIL] Could not save FileVault recovery key to 1Password"
+        # Securely delete the local copy now that it's in 1Password.
+        # rm -P overwrites the file before deleting on macOS (secure delete).
+        rm -P "$FILEVAULT_KEY_PATH" 2>/dev/null || rm -f "$FILEVAULT_KEY_PATH"
+        echo "  Local copy of recovery key has been securely deleted."
+    fi
+
+    # --- Store GPG private key ---
+    # Export the GPG private key for the configured Git email and store it in 1Password.
+    # Only export if a key exists for the configured email address.
+    GPG_EMAIL="github@barrios.io"
+    if gpg --list-secret-keys "$GPG_EMAIL" &>/dev/null; then
+        # Check if this key is already stored in 1Password to avoid duplicates (idempotent).
+        if ! op item get "GPG Private Key - $(hostname)" --vault "Personal" &>/dev/null; then
+            echo "  Exporting GPG private key to 1Password..."
+            # Export the ASCII-armored private key to a temp file with restricted permissions.
+            GPG_KEY_TMP="$(mktemp)"
+            chmod 600 "$GPG_KEY_TMP"
+            gpg --export-secret-keys --armor "$GPG_EMAIL" > "$GPG_KEY_TMP"
+            # Store the exported key as a Secure Note in 1Password.
+            op item create \
+                --category "Secure Note" \
+                --title "GPG Private Key - $(hostname)" \
+                --vault "Personal" \
+                "notesPlain=$(cat "$GPG_KEY_TMP")" 2>/dev/null \
+                && echo "  [PASS] GPG private key saved to 1Password" \
+                || echo "  [FAIL] Could not save GPG private key to 1Password"
+            # Securely delete the temp file containing the exported private key.
+            rm -P "$GPG_KEY_TMP" 2>/dev/null || rm -f "$GPG_KEY_TMP"
+        else
+            echo "  [PASS] GPG private key already exists in 1Password"
+        fi
+    else
+        echo "  [SKIP] No GPG key found for $GPG_EMAIL — generate one and re-run to store it."
+    fi
+
+    # --- Store SSH key ---
+    # If an SSH key exists, store it in 1Password for backup.
+    if [ -f "$HOME/.ssh/id_ed25519" ]; then
+        if ! op item get "SSH Private Key - $(hostname)" --vault "Personal" &>/dev/null; then
+            echo "  Saving SSH private key to 1Password..."
+            op item create \
+                --category "Secure Note" \
+                --title "SSH Private Key - $(hostname)" \
+                --vault "Personal" \
+                "notesPlain=$(cat "$HOME/.ssh/id_ed25519")" 2>/dev/null \
+                && echo "  [PASS] SSH private key saved to 1Password" \
+                || echo "  [FAIL] Could not save SSH private key to 1Password"
+        else
+            echo "  [PASS] SSH private key already exists in 1Password"
+        fi
+    elif [ -f "$HOME/.ssh/id_rsa" ]; then
+        if ! op item get "SSH Private Key - $(hostname)" --vault "Personal" &>/dev/null; then
+            echo "  Saving SSH private key (RSA) to 1Password..."
+            op item create \
+                --category "Secure Note" \
+                --title "SSH Private Key - $(hostname)" \
+                --vault "Personal" \
+                "notesPlain=$(cat "$HOME/.ssh/id_rsa")" 2>/dev/null \
+                && echo "  [PASS] SSH private key saved to 1Password" \
+                || echo "  [FAIL] Could not save SSH private key to 1Password"
+        else
+            echo "  [PASS] SSH private key already exists in 1Password"
+        fi
+    else
+        echo "  [SKIP] No SSH key found at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa"
+    fi
+
+else
+    echo "  [SKIP] 1Password CLI is not signed in — secrets will not be stored."
+    echo "  Sign in with 'eval \$(op signin)' and re-run the script to store secrets."
+    if [ "${FILEVAULT_KEY_PENDING:-false}" = "true" ]; then
+        echo "  IMPORTANT: FileVault recovery key is at ${FILEVAULT_KEY_PATH:-unknown}."
+        echo "  Save it manually and then delete the file."
+    fi
+fi
 
 ###########################
 #   GIT CONFIG            #
@@ -372,8 +542,11 @@ echo "==> Installing NVM..."
 
 # Only install if the ~/.nvm directory doesn't exist yet (idempotent).
 if [ ! -d "$HOME/.nvm" ]; then
-    # Download and run the official NVM install script (v0.39.7).
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    # Download the installer to a temp file, verify it downloaded fully, then execute.
+    NVM_INSTALLER="$(mktemp)"
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh -o "$NVM_INSTALLER"
+    bash "$NVM_INSTALLER"
+    rm -f "$NVM_INSTALLER"
 fi
 
 # Test: Verify the NVM directory was created.
@@ -406,16 +579,16 @@ fi
 echo "==> Installing Solarized color scheme..."
 
 # Only clone the repo if it doesn't already exist (idempotent).
-if [ ! -d ~/OSSetup/solarized ]; then
+if [ ! -d "$SETUP_HOME/solarized" ]; then
     # Clone the Solarized repo which contains terminal profiles and editor themes.
     git clone https://github.com/altercation/solarized.git
     # Open the Solarized Dark terminal profile in Terminal.app to make it available.
     # Only done on first install to avoid opening it every time the script runs.
-    open ~/OSSetup/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized\ Dark\ xterm-256color.terminal
+    open "$SETUP_HOME/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized Dark xterm-256color.terminal"
 fi
 
 # Test: Verify the solarized directory exists.
-verify_dir ~/OSSetup/solarized
+verify_dir "$SETUP_HOME/solarized"
 
 ###########################
 #   FINDER CONFIG         #
@@ -438,9 +611,12 @@ echo "==> Installing Oh My Zsh..."
 
 # Only install if the ~/.oh-my-zsh directory doesn't exist yet (idempotent).
 if [ ! -d "$HOME/.oh-my-zsh" ]; then
-    # Download and run the official installer.
+    # Download the installer to a temp file, verify it downloaded fully, then execute.
     # --unattended prevents it from changing the default shell or starting a new session.
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+    OMZ_INSTALLER="$(mktemp)"
+    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$OMZ_INSTALLER"
+    sh "$OMZ_INSTALLER" "" --unattended
+    rm -f "$OMZ_INSTALLER"
 fi
 
 # Test: Verify the Oh My Zsh directory was created.
@@ -450,14 +626,16 @@ verify_dir "$HOME/.oh-my-zsh"
 #   VIM SETUP             #
 ###########################
 # Run the separate Vim setup script which installs Vundle, plugins, and symlinks.
+# Use the absolute path derived from the repo root so it works from any working directory.
 echo "==> Running VIM setup..."
-/bin/bash app/vim/vim-setup.sh
+/bin/bash "$REPO_ROOT/app/vim/vim-setup.sh"
 
 # Install dependencies for the coc.nvim plugin (VS Code-like completion for Vim).
 # Only run if the coc.nvim plugin directory exists (it's installed by Vundle).
-if [ -d ~/.vim/bundle/coc.nvim ]; then
-    # Change to the plugin directory and install its Node.js dependencies.
-    cd ~/.vim/bundle/coc.nvim && npm install
+# Use a subshell so the `cd` doesn't change the working directory for the rest of the script.
+# The bundle directory is in ~/setup/vim/ (not the repo) since artifacts live there.
+if [ -d "$SETUP_HOME/vim/bundle/coc.nvim" ]; then
+    (cd "$SETUP_HOME/vim/bundle/coc.nvim" && npm install)
 fi
 
 ###########################

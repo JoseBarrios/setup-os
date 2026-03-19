@@ -2,6 +2,10 @@
 # Vim setup script — installs Vundle, creates directory structure, symlinks dotfiles,
 # installs plugins, and configures solarized colors.
 # Designed to be idempotent: safe to run multiple times without side effects.
+#
+# All generated artifacts (bundles, colors, backups, swap, undo) are stored in
+# ~/setup/vim/ — NOT inside the git repository — to avoid accidentally committing them.
+# Only the source .vimrc config lives in the repo.
 
 # Exit immediately on error (-e), treat unset variables as errors (-u),
 # and ensure piped commands propagate failures (-o pipefail).
@@ -64,25 +68,29 @@ function verify_cmd {
 #   VARIABLES   #
 #################
 
-# Space-separated list of files/folders to symlink from the home directory.
-# Each entry "X" will create ~/.X -> $dir/X.
-files=".vimrc vim"
+# Resolve the absolute path to the repo's app/vim/ directory based on this script's location.
+# This ensures paths are correct regardless of the caller's working directory.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Base directory containing the app/vim dotfiles (relative to where osx.sh runs).
-dir="${PWD}/app"
+# The repo's app/ directory — contains the source .vimrc config file (read-only, committed).
+REPO_APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Path to the vim configuration directory inside the dotfiles.
-vim="$dir/vim"
+# Path to the source .vimrc in the repository.
+REPO_VIMRC="$SCRIPT_DIR/.vimrc"
+
+# All generated vim artifacts live in ~/setup/vim/ — outside the git repo.
+# This prevents bundles, colors, swap files, etc. from being accidentally committed.
+VIM_HOME="$HOME/setup/vim"
 
 # Backup directory where existing dotfiles are moved before symlinking.
-olddir="$vim/old"
+olddir="$VIM_HOME/old"
 
 # Vim subdirectories for color schemes, backups, bundles, swap files, and undo history.
-vimcolors="$vim/colors"
-vimbackups="$vim/backups"
-vimbundle="$vim/bundle"
-vimswaps="$vim/swaps"
-vimundo="$vim/undo"
+vimcolors="$VIM_HOME/colors"
+vimbackups="$VIM_HOME/backups"
+vimbundle="$VIM_HOME/bundle"
+vimswaps="$VIM_HOME/swaps"
+vimundo="$VIM_HOME/undo"
 
 #################
 #   FUNCTIONS   #
@@ -104,11 +112,11 @@ function makeDirectory {
 #   MAIN    #
 #############
 
-# --- Create all required Vim directories ---
-echo "==> Creating VIM directories..."
+# --- Create all required Vim directories under ~/setup/vim/ ---
+echo "==> Creating VIM directories in ~/setup/vim/..."
 
-# Main vim config directory.
-makeDirectory "$vim"
+# Main vim artifact directory (will be symlinked as ~/.vim).
+makeDirectory "$VIM_HOME"
 
 # Directory for color scheme files (.vim).
 makeDirectory "$vimcolors"
@@ -129,7 +137,7 @@ makeDirectory "$vimundo"
 makeDirectory "$vimbundle"
 
 # Test: Verify all directories were created.
-verify_dir "$vim"
+verify_dir "$VIM_HOME"
 verify_dir "$vimcolors"
 verify_dir "$olddir"
 verify_dir "$vimswaps"
@@ -149,43 +157,42 @@ fi
 # Test: Verify Vundle directory exists.
 verify_dir "$vimbundle/Vundle.vim"
 
-# --- Create symlinks from home directory to dotfiles ---
+# --- Create symlinks from home directory ---
 echo "==> Creating symlinks..."
 
-# Change to the dotfiles base directory. Exit if it fails.
-cd "$dir" || exit 1
-
-# Loop through each file/folder that should be symlinked.
-for file in $files; do
-    # The actual file/folder inside the dotfiles directory.
-    target="$dir/$file"
-
-    # The symlink location in the home directory (e.g., ~/.vimrc, ~/.vim).
-    link=~/."$file"
-
-    # Check if a symlink already exists and points to the correct target.
-    # If so, skip it entirely — no need to back up or recreate (idempotent).
-    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
-        echo "Symlink for $file already exists and is correct"
-        continue
+# Symlink ~/.vimrc -> the repo's source .vimrc (config is versioned in git).
+VIMRC_LINK="$HOME/.vimrc"
+if [ -L "$VIMRC_LINK" ] && [ "$(readlink "$VIMRC_LINK")" = "$REPO_VIMRC" ]; then
+    # Symlink already correct — skip (idempotent).
+    echo "Symlink for .vimrc already exists and is correct"
+else
+    # Back up any existing .vimrc before replacing it.
+    if [ -e "$VIMRC_LINK" ] || [ -L "$VIMRC_LINK" ]; then
+        echo "Moving existing ~/.vimrc to $olddir"
+        mv "$VIMRC_LINK" "$olddir/"
     fi
+    echo "Creating symlink ~/.vimrc -> $REPO_VIMRC"
+    ln -sf "$REPO_VIMRC" "$VIMRC_LINK"
+fi
 
-    # If something exists at the link path (file, directory, or broken symlink),
-    # back it up to the old directory before creating our symlink.
-    if [ -e "$link" ] || [ -L "$link" ]; then
-        echo "Moving existing ~/.$file to $olddir"
-        mv "$link" "$olddir/"
+# Symlink ~/.vim -> ~/setup/vim/ (artifacts directory, outside the git repo).
+VIM_LINK="$HOME/.vim"
+if [ -L "$VIM_LINK" ] && [ "$(readlink "$VIM_LINK")" = "$VIM_HOME" ]; then
+    # Symlink already correct — skip (idempotent).
+    echo "Symlink for .vim already exists and is correct"
+else
+    # Back up any existing .vim before replacing it.
+    if [ -e "$VIM_LINK" ] || [ -L "$VIM_LINK" ]; then
+        echo "Moving existing ~/.vim to $olddir"
+        mv "$VIM_LINK" "$olddir/"
     fi
+    echo "Creating symlink ~/.vim -> $VIM_HOME"
+    ln -sf "$VIM_HOME" "$VIM_LINK"
+fi
 
-    # Create the symlink. -s = symbolic link, -f = overwrite if exists.
-    echo "Creating symlink to $file in home directory."
-    ln -sf "$target" "$link"
-done
-
-# Test: Verify each symlink points to the correct target.
-for file in $files; do
-    verify_symlink ~/."$file" "$dir/$file"
-done
+# Test: Verify both symlinks point to the correct targets.
+verify_symlink "$VIMRC_LINK" "$REPO_VIMRC"
+verify_symlink "$VIM_LINK" "$VIM_HOME"
 
 # --- Install Solarized color scheme for Vim ---
 echo "==> Installing solarized colors..."
@@ -194,14 +201,18 @@ echo "==> Installing solarized colors..."
 if [ ! -f "$vimcolors/solarized.vim" ]; then
     echo "Installing solarized colors for VIM"
 
+    # Use a temporary directory for the clone to avoid polluting the working directory.
+    # This also prevents rm -rf from accidentally deleting the wrong relative path.
+    SOLARIZED_TMP="$(mktemp -d)"
+
     # Clone the vim-colors-solarized repo (contains the .vim color file).
-    git clone https://github.com/altercation/vim-colors-solarized.git
+    git clone https://github.com/altercation/vim-colors-solarized.git "$SOLARIZED_TMP/vim-colors-solarized"
 
     # Copy the color scheme file to our Vim colors directory.
-    cp ./vim-colors-solarized/colors/solarized.vim "$vimcolors"
+    cp "$SOLARIZED_TMP/vim-colors-solarized/colors/solarized.vim" "$vimcolors"
 
     # Clean up the cloned repo — we only needed the one file.
-    rm -rf vim-colors-solarized
+    rm -rf "$SOLARIZED_TMP"
 fi
 
 # Test: Verify the solarized color file exists.
@@ -247,11 +258,9 @@ if [ -d "$vimbundle/YouCompleteMe/" ]; then
     # brew install is idempotent — skips already-installed packages.
     brew install cmake macvim
 
-    # Run YCM's Python-based install script to compile the native components.
-    python install.py
-
     # Run YCM's install script with all language completers, including clangd for C/C++.
-    ./install.py -all --clangd-completer
+    # Use python3 explicitly — macOS no longer ships a bare `python` binary.
+    python3 install.py --all --clangd-completer
 
     # Restore the previous working directory.
     popd
