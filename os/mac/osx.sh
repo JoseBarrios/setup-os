@@ -358,10 +358,14 @@ brew install vim
 # Git — version control system (Homebrew version is newer than macOS built-in).
 brew install git
 
+# GitHub CLI — interact with GitHub from the command line (PRs, issues, SSH keys, etc.).
+brew install gh
+
 # Test: Verify each core tool is available.
 verify_cmd cmake
 verify_cmd vim
 verify_cmd git
+verify_cmd gh
 
 ###########################
 #   PYTHON (pyenv)        #
