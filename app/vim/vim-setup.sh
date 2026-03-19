@@ -2,17 +2,65 @@
 # Vim setup script — installs Vundle, creates directory structure, symlinks dotfiles,
 # installs plugins, and configures solarized colors.
 # Designed to be idempotent: safe to run multiple times without side effects.
+# When an error occurs and Claude Code is available, it automatically asks Claude to debug.
 #
 # All generated artifacts (bundles, colors, backups, swap, undo) are stored in
 # ~/setup/vim/ — NOT inside the git repository — to avoid accidentally committing them.
 # Only the source .vimrc config lives in the repo.
 
-# Exit immediately on error (-e), treat unset variables as errors (-u),
-# and ensure piped commands propagate failures (-o pipefail).
-set -euo pipefail
+# Treat unset variables as errors (-u) and ensure piped commands propagate failures (-o pipefail).
+# We do NOT use -e (errexit) because we handle errors via an ERR trap instead,
+# which lets the script continue after Claude provides debugging guidance.
+set -uo pipefail
 
 # Counter to track how many verification tests fail during setup.
 FAIL_COUNT=0
+
+# Path to the script itself — used to provide context to Claude when debugging errors.
+SELF_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+###############################
+#   ERROR HANDLING            #
+###############################
+
+# Automatic error handler — triggered on any command failure.
+# Captures the failed command, exit code, and line number, then asks Claude to debug.
+# The script does NOT exit — it logs the error and continues so the user can review.
+function on_error {
+    local exit_code=$?
+    local line_number=$1
+    local failed_command="${BASH_COMMAND}"
+
+    echo ""
+    echo "  [ERROR] Command failed on line $line_number (exit code $exit_code)"
+    echo "  Failed command: $failed_command"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+
+    # If Claude Code is available, automatically ask it to diagnose the failure.
+    if command -v claude &>/dev/null; then
+        echo "  Asking Claude to diagnose..."
+        echo ""
+        claude --print "A Vim setup script encountered an error. Help me debug it.
+
+Script: $SELF_SCRIPT
+Line $line_number failed with exit code $exit_code.
+Failed command: $failed_command
+
+System info:
+- macOS $(sw_vers -productVersion 2>/dev/null || echo 'unknown')
+- Architecture: $(uname -m)
+
+Provide a concise diagnosis and a fix. Do not rewrite the entire script." 2>/dev/null || \
+            echo "  (Claude could not be reached — debug manually)"
+        echo ""
+    else
+        echo "  Claude Code is not yet installed — install it to enable auto-debugging."
+    fi
+}
+
+# Register the ERR trap. It fires on any command that returns a non-zero exit code.
+# IMPORTANT: This does NOT cause the script to exit — it just calls on_error and continues.
+trap 'on_error $LINENO' ERR
 
 ###############################
 #   VERIFICATION FUNCTIONS    #

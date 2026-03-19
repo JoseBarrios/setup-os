@@ -1,20 +1,71 @@
 #!/bin/bash
 # macOS setup script — installs dev tools, configures security, and sets up the environment.
 # Designed to be idempotent: safe to run multiple times without side effects.
+# When an error occurs and Claude Code is available, it automatically asks Claude to debug.
 
-# Exit immediately on error (-e), treat unset variables as errors (-u),
-# and ensure piped commands propagate failures (-o pipefail).
-set -euo pipefail
+# Treat unset variables as errors (-u) and ensure piped commands propagate failures (-o pipefail).
+# We do NOT use -e (errexit) because we handle errors via an ERR trap instead,
+# which lets the script continue after Claude provides debugging guidance.
+set -uo pipefail
 
 # Counter to track how many verification tests fail during the setup.
 FAIL_COUNT=0
+
+# Path to the script itself — used to provide context to Claude when debugging errors.
+SELF_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+###############################
+#   ERROR HANDLING            #
+###############################
+
+# Automatic error handler — triggered on any command failure.
+# Captures the failed command, exit code, and line number, then asks Claude to debug.
+# The script does NOT exit — it logs the error and continues so the user can review.
+function on_error {
+    local exit_code=$?
+    local line_number=$1
+    local failed_command="${BASH_COMMAND}"
+
+    echo ""
+    echo "  [ERROR] Command failed on line $line_number (exit code $exit_code)"
+    echo "  Failed command: $failed_command"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+
+    # If Claude Code is available, automatically ask it to diagnose the failure.
+    if command -v claude &>/dev/null; then
+        echo "  Asking Claude to diagnose..."
+        echo ""
+        # Use --print for non-interactive single-shot output.
+        # Provide the script source, the failed line, and system context.
+        claude --print "A macOS setup script encountered an error. Help me debug it.
+
+Script: $SELF_SCRIPT
+Line $line_number failed with exit code $exit_code.
+Failed command: $failed_command
+
+System info:
+- macOS $(sw_vers -productVersion 2>/dev/null || echo 'unknown')
+- Architecture: $(uname -m)
+- Brew prefix: ${BREW_PREFIX:-unknown}
+
+Provide a concise diagnosis and a fix. Do not rewrite the entire script." 2>/dev/null || \
+            echo "  (Claude could not be reached — debug manually)"
+        echo ""
+    else
+        echo "  Claude Code is not yet installed — install it to enable auto-debugging."
+    fi
+}
+
+# Register the ERR trap. It fires on any command that returns a non-zero exit code.
+# IMPORTANT: This does NOT cause the script to exit — it just calls on_error and continues.
+trap 'on_error $LINENO' ERR
 
 ###############################
 #   VERIFICATION FUNCTIONS    #
 ###############################
 
 # Verify that a CLI command is available on the system PATH.
-# Increments FAIL_COUNT and suggests Claude debugging if the command is missing.
+# Increments FAIL_COUNT if the command is missing.
 # Usage: verify_cmd <command_name>
 function verify_cmd {
     if command -v "$1" &>/dev/null; then
@@ -22,10 +73,6 @@ function verify_cmd {
     else
         echo "  [FAIL] $1 is NOT installed"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        # If Claude Code is already installed, remind the user it can help debug.
-        if command -v claude &>/dev/null; then
-            echo "  Claude Code is available — you can run 'claude' to debug this failure."
-        fi
     fi
 }
 
@@ -37,9 +84,6 @@ function verify_dir {
     else
         echo "  [FAIL] $1 does NOT exist"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        if command -v claude &>/dev/null; then
-            echo "  Claude Code is available — you can run 'claude' to debug this failure."
-        fi
     fi
 }
 
@@ -51,9 +95,6 @@ function verify_file {
     else
         echo "  [FAIL] $1 does NOT exist"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        if command -v claude &>/dev/null; then
-            echo "  Claude Code is available — you can run 'claude' to debug this failure."
-        fi
     fi
 }
 

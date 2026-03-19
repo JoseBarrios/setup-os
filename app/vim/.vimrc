@@ -19,11 +19,8 @@ Plugin 'Raimondi/delimitMate'
 Plugin 'tpope/vim-sensible'
 " Preview hex colors
 Plugin 'ap/vim-css-color'
-" Pretty-up code
 " JS Docs auto comment
 Plugin 'heavenshell/vim-jsdoc'
-" Linting for JS
-Plugin 'eslint/eslint'
 
 
 " LANGUAGE:
@@ -33,30 +30,18 @@ Plugin 'eslint/eslint'
 "Plugin 'honza/vim-snippets'
 " Auto complete for JS (and maybe C based langages, if you want)
 "Plugin 'Valloric/YouCompleteMe'
-" JsX
-Plugin 'chemzqm/vim-jsx-improve'
 " Go
 Plugin 'fatih/vim-go'
-" Yaml
- Plugin 'stephpy/vim-yaml'
-" Git ignore
-Plugin 'gisphm/vim-gitignore'
 " Python
 Plugin 'klen/python-mode'
-Plugin 'psf/black'
-Plugin 'nvie/vim-flake8'
 " Pug
 Plugin 'digitaltoad/vim-pug'
 " Ansible
 Plugin 'pearofducks/ansible-vim'
-" Jenkins
-Plugin 'thanethomson/vim-jenkinsfile'
-" Python indent
-Plugin 'indentpython.vim'
 
 " IDE:
 " Comment lines faster
-Plugin 'scrooloose/nerdcommenter'
+Plugin 'preservim/nerdcommenter'
 " On request snippets templates
 Plugin 'mattn/emmet-vim'
 " Coc / Intelisense
@@ -67,7 +52,7 @@ Plugin 'neoclide/coc.nvim'
 " REFERENCE: https://github.com/neoclide/coc.nvim/issues/651
 
 " Linting
-Plugin 'mitermayer/vim-prettier'
+Plugin 'prettier/vim-prettier'
 " mkdir -p ~/.vim/pack/plugins/start
 " git clone https://github.com/prettier/vim-prettier ~/.vim/pack/plugins/start/vim-prettier
 " ESLint errors and warnings
@@ -75,27 +60,22 @@ Plugin 'dense-analysis/ale'
 " Solarized as a package
 Plugin 'lifepillar/vim-solarized8'
 " File Treeview
-Plugin 'scrooloose/nerdtree'
-" Treeview + git
-Plugin 'Xuyuanp/nerdtree-git-plugin'
+Plugin 'preservim/nerdtree'
 " Tagline / vim editor footer with info
 Plugin 'edkolev/tmuxline.vim'
 " Buffer tabs
 Plugin 'mkitt/tabline.vim'
 " Status bar improvements
-Plugin 'bling/vim-airline'
+Plugin 'vim-airline/vim-airline'
 Plugin 'vim-airline/vim-airline-themes'
 " IDE-like go-to definition
 "Plugin 'ludovicchabant/vim-gutentags'
 "Plugin 'skywind3000/gutentags_plus'
 " Tag bar
-Plugin 'majutsushi/tagbar'
+Plugin 'preservim/tagbar'
 " Indent guides
 Plugin 'nathanaelkane/vim-indent-guides'
-" Fonts
-Plugin 'ryanoasis/nerd-fonts'
-" brew tap homebrew/cask-fonts && brew install --cask font-hack-nerd-font
-" Icons
+" Icons (requires Nerd Font installed via: brew install --cask font-hack-nerd-font)
 Plugin 'ryanoasis/vim-devicons'
 " Fuzzy directory finding
 " brew install fzf
@@ -132,8 +112,6 @@ Plugin 'wesQ3/vim-windowswap'
 Plugin 'jremmen/vim-ripgrep'
 " Open terminal window inside editor
 Plugin 'voldikss/vim-floaterm'
-" Fuzzy searcr
-Plugin 'haya14busa/incsearch.vim'
 
 " DOCSETS:
 """""""""""""""""""
@@ -253,9 +231,6 @@ set lcs=tab:▸\ ,trail:·,eol:¬,nbsp:_ " show “invisible” characters
 let g:vimspector_enable_mappings = 'HUMAN'
 silent! packadd! vimspector
 
-" Black
-let g:black_quiet = 1
-
 " JSDocs
 let g:jsdoc_allow_input_prompt = 1
 let g:jsdoc_input_description = 1
@@ -299,10 +274,6 @@ let g:gitgutter_highlight_linenrs = 1
 " MACVIM
 let macvim_skip_colorscheme=1
 
-" Fuzzy search
-map /  <Plug>(incsearch-forward)
-map ?  <Plug>(incsearch-backward)
-map g/ <Plug>(incsearch-stay)
 
 " IDE / CTAGS
 " REQUIRES: brew install ctags-exuberant global
