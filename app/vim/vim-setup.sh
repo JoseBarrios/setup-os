@@ -273,6 +273,16 @@ echo "==> Installing vim plugins..."
 # then quit all buffers. Vundle installs missing plugins and skips existing ones.
 vim +PluginInstall +qall
 
+# --- Fix npm vulnerabilities in plugins ---
+echo "==> Running npm audit fix for plugins..."
+
+# coc.nvim runs npm install as a prepare step and may have vulnerable dependencies.
+if [ -d "$vimbundle/coc.nvim/" ] && [ -f "$vimbundle/coc.nvim/package.json" ]; then
+    pushd "$vimbundle/coc.nvim/"
+    npm audit fix 2>/dev/null || true
+    popd
+fi
+
 # --- Configure individual plugins that need extra setup ---
 echo "==> Configuring plugins..."
 
