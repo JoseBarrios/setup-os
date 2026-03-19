@@ -239,11 +239,19 @@ verify_cmd brew
 # during setup (FileVault recovery key, GPG keys, etc.).
 echo "==> Installing 1Password and 1Password CLI..."
 
-# Install the 1Password desktop app (GUI). Idempotent — skips if already installed.
-brew install --cask 1password
+# Install the 1Password desktop app (GUI).
+# brew --cask fails if the app exists but wasn't installed via Homebrew (e.g., App Store).
+# Check for the .app bundle on disk first to avoid this error.
+if [ ! -d "/Applications/1Password.app" ]; then
+    brew install --cask 1password
+else
+    echo "  1Password.app already exists, skipping cask install"
+fi
 
 # Install the 1Password CLI (`op` command). Idempotent — skips if already installed.
-brew install 1password-cli
+if ! command -v op &>/dev/null; then
+    brew install 1password-cli
+fi
 
 # Test: Verify both are available.
 verify_cmd op
@@ -334,9 +342,14 @@ verify_cmd pyenv
 echo "==> Installing fonts..."
 
 # Install the Hack Nerd Font as a macOS cask (GUI application/resource).
-# brew install --cask is idempotent — skips if already installed.
-# Use brew_safe to avoid pyenv shim interference.
-brew_safe install --cask font-hack-nerd-font
+# brew --cask fails if the font was installed outside Homebrew.
+# Check if it's already listed by brew or exists in the system font directory.
+if ! brew_safe list --cask font-hack-nerd-font &>/dev/null && \
+   ! ls ~/Library/Fonts/Hack*Nerd* &>/dev/null 2>&1; then
+    brew_safe install --cask font-hack-nerd-font
+else
+    echo "  Hack Nerd Font already installed, skipping cask install"
+fi
 
 ###########################
 #   LINTERS               #

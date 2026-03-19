@@ -251,7 +251,7 @@ set lcs=tab:▸\ ,trail:·,eol:¬,nbsp:_ " show “invisible” characters
 ""------------------------------------------------------------------------
 " Inspector
 let g:vimspector_enable_mappings = 'HUMAN'
-packadd! vimspector
+silent! packadd! vimspector
 
 " Black
 let g:black_quiet = 1
@@ -342,7 +342,7 @@ set t_Co=256
 set background=dark
 let g:solarized_termcolors=256
 let g:solarized_termtrans = 1
-colorscheme solarized8
+silent! colorscheme solarized8
 " Custom line column colours
 highlight LineNr ctermbg=NONE ctermfg=59
 highlight SignColumn ctermbg=NONE guibg=NONE
