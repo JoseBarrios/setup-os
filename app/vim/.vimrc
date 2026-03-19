@@ -2,6 +2,7 @@
 " VUNDLE PLUGINS:
 "------------------
 set nocompatible " be iMproved, required"
+set encoding=UTF-8 " must be set before plugins load (required by vim-devicons)
 filetype off " required
 
 " set the runtime path to include Vundle and initialize
@@ -130,8 +131,6 @@ call vundle#end()            " required
 filetype plugin indent on    " required
 " Put your non-Plugin stuff after this line
 "------------------------------------------------------------------------
-
-set encoding=UTF-8
 
 " VIM FOLDERS:
 "------------------------------------------------------------------------
@@ -274,6 +273,16 @@ let g:gitgutter_highlight_linenrs = 1
 " MACVIM
 let macvim_skip_colorscheme=1
 
+" DEVICONS / NERDTREE ICONS
+" Requires a Nerd Font set as the terminal font (e.g. Hack Nerd Font)
+let g:webdevicons_enable = 1
+let g:webdevicons_enable_nerdtree = 1
+let g:webdevicons_enable_airline_tabline = 1
+let g:webdevicons_enable_airline_statusline = 1
+let g:webdevicons_conceal_nerdtree_brackets = 1
+let g:NERDTreeShowHidden = 1
+let g:NERDTreeDirArrowExpandable = "\u00a0"
+let g:NERDTreeDirArrowCollapsible = "\u00a0"
 
 " IDE / CTAGS
 " REQUIRES: brew install ctags-exuberant global
