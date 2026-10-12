@@ -1,26 +1,70 @@
 #!/bin/bash
-# macOS setup script — installs dev tools, configures security, and sets up the environment.
-# Designed to be idempotent: safe to run multiple times without side effects.
-# When an error occurs and Claude Code is available, it automatically asks Claude to debug.
+# macOS setup script: installs dev tools, hardens security, and sets up Git,
+# SSH and GitHub with keys that live in 1Password (never on disk).
+# Idempotent: safe to run again. Every run ends with a pass/fail summary and a
+# list of anything that still needs you.
+# When a command fails and Claude Code is installed, Claude is asked to debug it.
+#
+# Written for the bash 3.2 that ships with macOS (/bin/bash).
 
-# Treat unset variables as errors (-u) and ensure piped commands propagate failures (-o pipefail).
-# We do NOT use -e (errexit) because we handle errors via an ERR trap instead,
-# which lets the script continue after Claude provides debugging guidance.
+# Treat unset variables as errors (-u) and make pipelines fail if any part fails.
+# No -e (errexit): failures go to the ERR trap below, which logs them and keeps going.
 set -uo pipefail
 
-# Counter to track how many verification tests fail during the setup.
-FAIL_COUNT=0
+###############################
+#   SETTINGS                  #
+###############################
 
-# Path to the script itself — used to provide context to Claude when debugging errors.
+GIT_NAME="JoseBarrios"
+GIT_EMAIL="github@barrios.io"
+GIT_EDITOR="vim"
+
+# 1Password vault for the SSH key and the FileVault recovery key.
+# Empty means "Personal", "Private" or "Employee", whichever exists first. The 1Password SSH agent
+# serves keys from that vault by default. Override with: OP_VAULT=Work ./osx.sh
+OP_VAULT="${OP_VAULT:-}"
+
+# LocalHostName is stable; `hostname -s` can change with the network (DHCP/DNS),
+# which would create a second key on every new network.
+HOST_SHORT="$( (scutil --get LocalHostName 2>/dev/null || hostname -s) | tr -cd 'A-Za-z0-9._-')"
+SSH_KEY_TITLE="SSH Key - ${HOST_SHORT}"
+FILEVAULT_ITEM_TITLE="FileVault Recovery Key - ${HOST_SHORT}"
+
+OP_AGENT_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+OP_SSH_SIGN="/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
+ALLOWED_SIGNERS="$HOME/.config/git/allowed_signers"
+
+NVM_VERSION="v0.40.8"
+
+TERMINAL_PROFILE="Solarized Dark xterm-256color"
+TERMINAL_FONT="HackNFM-Regular"
+TERMINAL_FONT_SIZE=14
+
+BREW_FORMULAE=(cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep)
+
+# FileVault personal recovery keys look like XXXX-XXXX-XXXX-XXXX-XXXX-XXXX.
+FV_KEY_REGEX='^[A-Z0-9]{4}(-[A-Z0-9]{4}){5}$'
+
+# Counters for the final summary.
+FAIL_COUNT=0
+MANUAL_NOTES=""
+
 SELF_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Generated artifacts (vim bundles, solarized, etc.) live in ~/setup/, outside
+# the git repository, so they are never committed by accident.
+SETUP_HOME="$HOME/setup"
 
 ###############################
 #   ERROR HANDLING            #
 ###############################
 
-# Automatic error handler — triggered on any command failure.
-# Captures the failed command, exit code, and line number, then asks Claude to debug.
-# The script does NOT exit — it logs the error and continues so the user can review.
+# Runs on any failed command at the top level of this script (functions report
+# their own failures). Logs the failure, asks Claude to diagnose it if Claude
+# Code is installed, then lets the script continue.
+# shellcheck disable=SC2329  # invoked by the ERR trap
 function on_error {
     local exit_code=$?
     local line_number=$1
@@ -31,12 +75,9 @@ function on_error {
     echo "  Failed command: $failed_command"
     FAIL_COUNT=$((FAIL_COUNT + 1))
 
-    # If Claude Code is available, automatically ask it to diagnose the failure.
     if command -v claude &>/dev/null; then
         echo "  Asking Claude to diagnose..."
         echo ""
-        # Use --print for non-interactive single-shot output.
-        # Provide the script source, the failed line, and system context.
         claude --print "A macOS setup script encountered an error. Help me debug it.
 
 Script: $SELF_SCRIPT
@@ -49,97 +90,74 @@ System info:
 - Brew prefix: ${BREW_PREFIX:-unknown}
 
 Provide a concise diagnosis and a fix. Do not rewrite the entire script." 2>/dev/null || \
-            echo "  (Claude could not be reached — debug manually)"
+            echo "  (Claude could not be reached, debug manually)"
         echo ""
     else
-        echo "  Claude Code is not yet installed — install it to enable auto-debugging."
+        echo "  Claude Code is not installed yet, so no automatic debugging."
     fi
 }
 
-# Register the ERR trap. It fires on any command that returns a non-zero exit code.
-# IMPORTANT: This does NOT cause the script to exit — it just calls on_error and continues.
 trap 'on_error $LINENO' ERR
 
 ###############################
-#   VERIFICATION FUNCTIONS    #
+#   HELPERS                   #
 ###############################
 
-# Verify that a CLI command is available on the system PATH.
-# Increments FAIL_COUNT if the command is missing.
-# Usage: verify_cmd <command_name>
+function pass { echo "  [PASS] $1"; }
+function fail { echo "  [FAIL] $1"; FAIL_COUNT=$((FAIL_COUNT + 1)); }
+function info { echo "  [INFO] $1"; }
+
+# Something only the user can do. Shown now and again in the final summary.
+function manual {
+    echo "  [MANUAL] $1"
+    MANUAL_NOTES="${MANUAL_NOTES}  - $1"$'\n'
+}
+
+# True when a person is at the keyboard (stdin and stdout are a terminal).
+function is_interactive { [ -t 0 ] && [ -t 1 ]; }
+
 function verify_cmd {
-    if command -v "$1" &>/dev/null; then
-        echo "  [PASS] $1 is installed"
-    else
-        echo "  [FAIL] $1 is NOT installed"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-    fi
+    if command -v "$1" &>/dev/null; then pass "$1 is installed"; else fail "$1 is NOT installed"; fi
 }
 
-# Verify that a directory exists on disk.
-# Usage: verify_dir <path>
 function verify_dir {
-    if [ -d "$1" ]; then
-        echo "  [PASS] $1 exists"
-    else
-        echo "  [FAIL] $1 does NOT exist"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-    fi
+    if [ -d "$1" ]; then pass "$1 exists"; else fail "$1 does NOT exist"; fi
 }
 
-# Verify that a regular file exists on disk.
-# Usage: verify_file <path>
 function verify_file {
-    if [ -f "$1" ]; then
-        echo "  [PASS] $1 exists"
-    else
-        echo "  [FAIL] $1 does NOT exist"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-    fi
+    if [ -f "$1" ]; then pass "$1 exists"; else fail "$1 does NOT exist"; fi
 }
 
-# Verify that a git global config key matches an expected value.
 # Usage: verify_git_config <key> <expected_value>
 function verify_git_config {
-    # Read the current value; default to empty string if the key is unset.
     local actual
     actual="$(git config --global "$1" 2>/dev/null || true)"
-    if [ "$actual" = "$2" ]; then
-        echo "  [PASS] git $1 = $2"
-    else
-        echo "  [FAIL] git $1 expected '$2', got '$actual'"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-    fi
+    if [ "$actual" = "$2" ]; then pass "git $1 = $2"; else fail "git $1 expected '$2', got '$actual'"; fi
 }
 
-# Verify that a specific line exists verbatim in a file.
 # Usage: verify_line_in_file <line> <file_path>
 function verify_line_in_file {
-    # -q = quiet, -x = match whole line, -F = fixed string (no regex).
-    if grep -qxF "$1" "$2" 2>/dev/null; then
-        echo "  [PASS] '$1' found in $2"
-    else
-        echo "  [FAIL] '$1' NOT found in $2"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-    fi
+    if grep -qxF -- "$1" "$2" 2>/dev/null; then pass "'$1' found in $2"; else fail "'$1' NOT found in $2"; fi
 }
 
-# Verify a macOS defaults (plist) boolean value.
 # Usage: verify_defaults <domain> <key> <expected_value>
 function verify_defaults {
     local actual
     actual="$(defaults read "$1" "$2" 2>/dev/null || true)"
-    if [ "$actual" = "$3" ]; then
-        echo "  [PASS] $1 $2 = $3"
-    else
-        echo "  [FAIL] $1 $2 expected '$3', got '$actual'"
-        FAIL_COUNT=$((FAIL_COUNT + 1))
+    if [ "$actual" = "$3" ]; then pass "$1 $2 = $3"; else fail "$1 $2 expected '$3', got '$actual'"; fi
+}
+
+# Append a line to a file unless the file already has it verbatim.
+# Usage: append_line <line> <file_path>
+function append_line {
+    touch "$2"
+    if ! grep -qxF -- "$1" "$2"; then
+        printf '%s\n' "$1" >> "$2"
     fi
 }
 
-# Wrapper function for brew that strips pyenv shims from PATH.
-# This prevents Homebrew from accidentally using a pyenv-managed Python.
-# Note: shell aliases do not work in non-interactive scripts, so a function is used.
+# Run brew without pyenv shims on PATH, so Homebrew never picks up a
+# pyenv-managed Python. (Aliases don't work in scripts, hence a function.)
 function brew_safe {
     if command -v pyenv &>/dev/null; then
         env PATH="${PATH//$(pyenv root)\/shims:/}" brew "$@"
@@ -148,584 +166,668 @@ function brew_safe {
     fi
 }
 
-# Resolve the absolute path to the repository root (two levels up from this script).
-# This ensures all relative paths work regardless of where the script is invoked from.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# Pull the RecoveryKey value out of an fdesetup plist.
+# Usage: extract_recovery_key <plist_text>
+function extract_recovery_key {
+    local key
+    key="$(printf '%s' "$1" | plutil -extract RecoveryKey raw -o - - 2>/dev/null)" || key=""
+    if [ -z "$key" ]; then
+        # Fallback for older plutil, or stray text before the XML.
+        key="$(printf '%s\n' "$1" | sed -n '/<key>RecoveryKey<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}')"
+    fi
+    printf '%s' "$key"
+}
 
-# All generated artifacts (vim bundles, solarized, etc.) live in ~/setup/ —
-# outside the git repository — to avoid accidentally committing them.
-# -p ensures no error if the directory already exists (idempotent).
-SETUP_HOME="$HOME/setup"
+# Save a secret to 1Password as a Password item.
+# The item JSON is built by printf (a shell builtin) and piped to `op`, so the
+# secret never appears in any process's command-line arguments.
+# Usage: op_store_password <title> <secret>
+function op_store_password {
+    printf '{"title":"%s","category":"PASSWORD","fields":[{"id":"password","type":"CONCEALED","purpose":"PASSWORD","label":"password","value":"%s"}]}' "$1" "$2" \
+        | op item create --vault "$OP_VAULT" - >/dev/null
+}
+
+# Make sure the SSH public key is on GitHub at the given API endpoint.
+# Usage: add_github_key <user/keys|user/ssh_signing_keys> <label>
+function add_github_key {
+    local endpoint="$1" label="$2" existing
+    if ! existing="$(gh api "$endpoint" --paginate --jq '.[].key' 2>/dev/null)"; then
+        fail "Could not list your GitHub $label keys"
+        return 0
+    fi
+    if grep -qxF -- "$SSH_PUBKEY" <<< "$existing"; then
+        pass "SSH key is on GitHub ($label)"
+    elif gh api "$endpoint" -f title="$HOST_SHORT" -f key="$SSH_PUBKEY" >/dev/null; then
+        pass "Added SSH key to GitHub ($label)"
+    else
+        fail "Could not add the SSH key to GitHub ($label)"
+    fi
+}
+
+function terminal_has_profile {
+    [ "$(osascript -e "tell application \"Terminal\" to exists settings set \"$TERMINAL_PROFILE\"" 2>/dev/null)" = "true" ]
+}
+
+###############################
+#   PRECHECKS                 #
+###############################
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "This script is for macOS."
+    exit 1
+fi
+
+if [ "$EUID" -eq 0 ]; then
+    echo "Run this as your normal user, not with sudo. It asks for sudo when it needs it."
+    exit 1
+fi
+
 mkdir -p "$SETUP_HOME"
 
-# Change into the artifacts directory. Exit if it fails (e.g., permission denied).
-cd "$SETUP_HOME" || exit 1
+echo "==> Some steps need admin rights. Enter your password once now:"
+sudo -v
 
 ###########################
-#   MACOS SECURITY        #
+#   HOMEBREW              #
 ###########################
-# Configure macOS security settings early so the machine is hardened
-# before installing third-party software.
-
-# --- FileVault (full-disk encryption) ---
-# FileVault encrypts the entire startup disk to protect data at rest.
-# `fdesetup status` reports "FileVault is On." or "FileVault is Off.".
-# The status check may require root on some configurations, so we guard with || true.
-echo "==> Configuring FileVault (full-disk encryption)..."
-if fdesetup status 2>/dev/null | grep -q "FileVault is On."; then
-    # FileVault is already enabled — nothing to do.
-    echo "  [PASS] FileVault is already enabled"
-else
-    # Enable FileVault with deferred mode: encryption begins at next logout.
-    # -defer writes the recovery key to a plist so it can be escrowed later.
-    # This requires the current user's password (prompted interactively).
-
-    # Store the recovery key plist in a secure, user-owned location (not /tmp/).
-    # /tmp/ is world-readable and any local user could read the recovery key.
-    FILEVAULT_KEY_DIR="$HOME/.filevault"
-    mkdir -p "$FILEVAULT_KEY_DIR"
-    # Restrict permissions so only the owner can read/write/traverse this directory.
-    chmod 700 "$FILEVAULT_KEY_DIR"
-    FILEVAULT_KEY_PATH="$FILEVAULT_KEY_DIR/recovery_key.plist"
-
-    echo "  FileVault is OFF. Enabling with deferred activation..."
-    sudo fdesetup enable -defer "$FILEVAULT_KEY_PATH"
-    # Restrict the recovery key file so only the owner can read it.
-    chmod 600 "$FILEVAULT_KEY_PATH"
-    echo "  FileVault will activate on next logout/restart."
-    echo "  [PASS] FileVault enable command succeeded (pending next logout)"
-
-    # Flag that the recovery key needs to be saved to 1Password after it's set up.
-    FILEVAULT_KEY_PENDING=true
-fi
-
-# --- Lockdown Mode ---
-# Lockdown Mode is an extreme, optional protection for users who may be targeted
-# by sophisticated cyberattacks. It limits attack surface by disabling certain
-# features (message attachment types, JIT compilation, incoming FaceTime, etc.).
-# Available on macOS Ventura (13.0) and later.
-echo "==> Configuring Lockdown Mode..."
-
-# Get the major macOS version number (e.g., "14" for Sonoma, "13" for Ventura).
-MACOS_VERSION="$(sw_vers -productVersion | cut -d. -f1)"
-
-if [ "$MACOS_VERSION" -ge 13 ]; then
-    # Check the current Lockdown Mode state from the global Apple security domain.
-    # LDMGlobalEnabled = 1 means on, 0 or missing means off.
-    LOCKDOWN_STATUS="$(defaults read com.apple.security.lockdownmode LDMGlobalEnabled 2>/dev/null || echo "0")"
-    if [ "$LOCKDOWN_STATUS" = "1" ]; then
-        # Lockdown Mode is already enabled — nothing to do.
-        echo "  [PASS] Lockdown Mode is already enabled"
-    else
-        # Enable Lockdown Mode by writing to the Apple security preferences domain.
-        # A reboot is required for the change to take full effect.
-        echo "  Lockdown Mode is OFF. Enabling..."
-        sudo defaults write com.apple.security.lockdownmode LDMGlobalEnabled -bool true
-        echo "  Lockdown Mode enabled. A REBOOT is required to fully activate."
-        echo "  [PASS] Lockdown Mode enable command succeeded (pending reboot)"
-    fi
-else
-    # Lockdown Mode is not available on macOS versions before Ventura (13).
-    echo "  [SKIP] Lockdown Mode requires macOS 13 (Ventura) or later. Current: $MACOS_VERSION"
-fi
-
-###########################
-#   BREW                  #
-###########################
-# Homebrew is the package manager for macOS — used to install all dev tools.
 echo "==> Installing Homebrew..."
 
-# Only install if the `brew` command is not already available.
-if ! command -v brew &>/dev/null; then
-    # Download the official Homebrew installer to a temp file so we can verify
-    # it downloaded completely before executing it. Piping curl directly to bash
-    # risks executing a truncated or corrupted script.
+# Check the install locations too: on a re-run brew may be installed but not on
+# this script's PATH yet, since bash doesn't read ~/.zprofile.
+if ! command -v brew &>/dev/null && [ ! -x /opt/homebrew/bin/brew ] && [ ! -x /usr/local/bin/brew ]; then
+    # Download to a temp file first so a cut-off download is never executed.
     BREW_INSTALLER="$(mktemp)"
     curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$BREW_INSTALLER"
     /bin/bash "$BREW_INSTALLER"
     rm -f "$BREW_INSTALLER"
 fi
 
-# Detect the correct Homebrew prefix based on CPU architecture.
-# Apple Silicon (M1+) installs to /opt/homebrew; Intel installs to /usr/local.
-if [ -f /opt/homebrew/bin/brew ]; then
+# Apple Silicon installs to /opt/homebrew, Intel to /usr/local.
+if [ -x /opt/homebrew/bin/brew ]; then
     BREW_PREFIX="/opt/homebrew"
 else
     BREW_PREFIX="/usr/local"
 fi
 
-# Add Homebrew's shell environment setup to .zprofile so it loads on login.
-# grep -qxF checks if the exact line already exists to avoid duplicate entries.
-grep -qxF "eval \"\$(${BREW_PREFIX}/bin/brew shellenv)\"" "$HOME/.zprofile" || \
-    (echo; echo "eval \"\$(${BREW_PREFIX}/bin/brew shellenv)\"") >> "$HOME/.zprofile"
+append_line "eval \"\$(${BREW_PREFIX}/bin/brew shellenv)\"" "$HOME/.zprofile"
+eval "$("${BREW_PREFIX}/bin/brew" shellenv)"
 
-# Load Homebrew into the current shell session so `brew` works immediately.
-eval "$(${BREW_PREFIX}/bin/brew shellenv)"
-
-# Fetch the latest package metadata from Homebrew's repositories.
 brew update
-
-# Run Homebrew's self-diagnostic checks. Allow non-zero exit (warnings are common).
+# Warnings from brew doctor are common and not fatal.
 brew doctor || true
 
-# Test: Verify brew is now available.
 verify_cmd brew
 
 ###########################
-#   1PASSWORD + CLI       #
+#   OH MY ZSH             #
 ###########################
-# 1Password is a password manager. The CLI (`op`) allows storing and retrieving
-# secrets from the command line, which we use to securely store keys generated
-# during setup (FileVault recovery key, GPG keys, etc.).
-echo "==> Installing 1Password and 1Password CLI..."
+# Installed before anything else edits ~/.zshrc: the Oh My Zsh installer moves an
+# existing ~/.zshrc aside and writes its own, which would drop earlier lines.
+echo "==> Installing Oh My Zsh..."
 
-# Install the 1Password desktop app (GUI).
-# brew --cask fails if the app exists but wasn't installed via Homebrew (e.g., App Store).
-# Check for the .app bundle on disk first to avoid this error.
-if [ ! -d "/Applications/1Password.app" ]; then
-    brew install --cask 1password
-else
-    echo "  1Password.app already exists, skipping cask install"
+if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    OMZ_INSTALLER="$(mktemp)"
+    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$OMZ_INSTALLER"
+    # --unattended: don't change the login shell or start a new zsh.
+    sh "$OMZ_INSTALLER" --unattended
+    rm -f "$OMZ_INSTALLER"
 fi
 
-# Install the 1Password CLI (`op` command). Idempotent — skips if already installed.
-if ! command -v op &>/dev/null; then
-    brew install 1password-cli
-fi
-
-# Test: Verify both are available.
-verify_cmd op
-
-# Check if the user is signed in to 1Password CLI.
-# `op account list` returns non-zero or empty output if not signed in.
-# The user must sign in interactively before we can store secrets.
-if op account list 2>/dev/null | grep -q "."; then
-    echo "  [PASS] 1Password CLI is signed in"
-    OP_SIGNED_IN=true
-else
-    echo "  [INFO] 1Password CLI is not signed in."
-    echo "  Run 'eval \$(op signin)' to sign in, then re-run this script to store secrets."
-    OP_SIGNED_IN=false
-fi
+verify_dir "$HOME/.oh-my-zsh"
 
 ###########################
-#   NODE + CLAUDE CODE    #
+#   CLAUDE CODE           #
 ###########################
-# Install Node.js first because Claude Code's installer depends on it.
-# Claude Code is installed as early as possible so it's available for debugging.
-
-echo "==> Installing Node..."
-# brew install is idempotent — if node is already installed, this is a no-op.
-brew install node
-# Test: Verify both node and npm (Node Package Manager) are available.
-verify_cmd node
-verify_cmd npm
-
+# Installed early so it can debug failures in the rest of the script.
 echo "==> Installing Claude Code..."
-# Only install Claude Code if it's not already on the PATH.
-if ! command -v claude &>/dev/null; then
-    # Download the installer to a temp file, verify it downloaded fully, then execute.
+
+if ! command -v claude &>/dev/null && [ ! -x "$HOME/.local/bin/claude" ]; then
     CLAUDE_INSTALLER="$(mktemp)"
     curl -fsSL https://claude.ai/install.sh -o "$CLAUDE_INSTALLER"
     /bin/bash "$CLAUDE_INSTALLER"
     rm -f "$CLAUDE_INSTALLER"
 fi
 
-# Ensure Claude Code's install directory is on the PATH in future shell sessions.
-# grep -qxF prevents adding the line if it's already present (idempotent).
-grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' ~/.zshrc || \
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-
-# Also export the PATH in the current session so `claude` is available now.
+# shellcheck disable=SC2016  # literal line for ~/.zshrc
+append_line 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc"
 export PATH="$HOME/.local/bin:$PATH"
 
-# Test: Verify claude command is available.
 verify_cmd claude
+
+###########################
+#   1PASSWORD + CLI       #
+###########################
+# The SSH key, commit signing and the FileVault recovery key all depend on this.
+echo "==> Installing 1Password and 1Password CLI..."
+
+# The cask fails if the app was installed outside Homebrew (e.g. downloaded), so
+# check for the app on disk first.
+if [ ! -d "/Applications/1Password.app" ]; then
+    brew_safe install --cask 1password
+else
+    echo "  1Password.app already installed"
+fi
+
+if ! command -v op &>/dev/null; then
+    brew_safe install --cask 1password-cli
+fi
+
+verify_dir "/Applications/1Password.app"
+verify_cmd op
+
+OP_READY=false
+if command -v op &>/dev/null; then
+    # If the app integration is already on, this only asks you to approve in 1Password.
+    if ! op whoami &>/dev/null && [ -n "$(op account list 2>/dev/null || true)" ]; then
+        eval "$(op signin)" || true
+    fi
+    if ! op whoami &>/dev/null && is_interactive; then
+        open -a "1Password" 2>/dev/null || true
+        echo ""
+        echo "  1Password CLI is not signed in. In the 1Password app:"
+        echo "    1. Sign in to your account."
+        echo "    2. Settings > Developer: turn on 'Integrate with 1Password CLI' and 'Use the SSH agent'."
+        OP_REPLY=""
+        read -r -p "  Press Enter when done (or type s to skip the 1Password steps): " OP_REPLY
+        if [ "$OP_REPLY" != "s" ]; then
+            # With app integration this just authorizes this terminal session.
+            eval "$(op signin)" || true
+        fi
+    fi
+    if op whoami &>/dev/null; then
+        OP_READY=true
+    fi
+fi
+
+if [ "$OP_READY" = true ]; then
+    if [ -z "$OP_VAULT" ]; then
+        for vault in Personal Private Employee; do
+            if op vault get "$vault" &>/dev/null; then
+                OP_VAULT="$vault"
+                break
+            fi
+        done
+    fi
+    if [ -n "$OP_VAULT" ] && op vault get "$OP_VAULT" &>/dev/null; then
+        pass "1Password CLI is signed in (vault: $OP_VAULT)"
+    else
+        fail "No 1Password vault named Personal, Private or Employee. Re-run with OP_VAULT=<vault name>."
+        OP_READY=false
+    fi
+else
+    manual "Sign in to 1Password and turn on Settings > Developer > 'Integrate with 1Password CLI', then re-run. SSH key, signing and recovery key steps were skipped."
+fi
+
+###########################
+#   MACOS SECURITY        #
+###########################
+echo "==> Configuring disk encryption (FileVault)..."
+
+# Older versions of this script left the recovery key in this file. If it's
+# here, move it into 1Password and delete it.
+FV_LEGACY_DIR="$HOME/.filevault"
+FV_LEGACY_KEY="$FV_LEGACY_DIR/recovery_key.plist"
+
+if [ -f "$FV_LEGACY_KEY" ]; then
+    if [ "$OP_READY" = true ]; then
+        FV_OLD_PLIST="$(cat "$FV_LEGACY_KEY" 2>/dev/null || sudo cat "$FV_LEGACY_KEY")"
+        FV_KEY="$(extract_recovery_key "$FV_OLD_PLIST")"
+        if [[ $FV_KEY =~ $FV_KEY_REGEX ]] && op_store_password "$FILEVAULT_ITEM_TITLE" "$FV_KEY"; then
+            rm -f "$FV_LEGACY_KEY" 2>/dev/null || sudo rm -f "$FV_LEGACY_KEY"
+            rmdir "$FV_LEGACY_DIR" 2>/dev/null || true
+            pass "Moved the FileVault recovery key from ~/.filevault into 1Password ($OP_VAULT / $FILEVAULT_ITEM_TITLE)"
+        else
+            fail "Could not move ~/.filevault/recovery_key.plist into 1Password (file left in place)"
+        fi
+        unset FV_OLD_PLIST FV_KEY
+    else
+        manual "A FileVault recovery key is waiting in ~/.filevault/recovery_key.plist. Sign in to 1Password and re-run to move it there."
+    fi
+fi
+
+FV_STATUS="$(fdesetup status 2>/dev/null || true)"
+case "$FV_STATUS" in
+    *"FileVault is On"*)
+        pass "FileVault is on"
+        # Encryption runs in the background after it's turned on.
+        case "$FV_STATUS" in
+            *"Encryption in progress"*) info "Disk encryption still in progress: ${FV_STATUS##*Percent completed = }%" ;;
+        esac
+        ;;
+    *Deferred*|*"will be enabled"*)
+        manual "FileVault turns on at your next logout (set up by an older version of this script). Log out and back in, then re-run to move the recovery key into 1Password."
+        ;;
+    *)
+        echo "  FileVault is off. Turning it on now."
+        echo "  Enter your macOS login password when asked (typing may not show), then"
+        echo "  approve the 'fdesetup would like to enable FileVault' window (it may open behind this one)."
+        # Not deferred: the recovery key comes back right away on stdout, so it
+        # can go straight to 1Password without ever being written to disk.
+        FV_PLIST="$(sudo fdesetup enable -user "$USER" -outputplist)"
+        FV_KEY="$(extract_recovery_key "${FV_PLIST:-}")"
+        if [[ $FV_KEY =~ $FV_KEY_REGEX ]]; then
+            if [ "$OP_READY" = true ] && op_store_password "$FILEVAULT_ITEM_TITLE" "$FV_KEY"; then
+                pass "FileVault is on; recovery key saved to 1Password ($OP_VAULT / $FILEVAULT_ITEM_TITLE)"
+            else
+                # 1Password isn't ready: keep the key in an owner-only file so the
+                # next run can move it into 1Password (see above).
+                (umask 077; mkdir -p "$FV_LEGACY_DIR"; printf '%s\n' "$FV_PLIST" > "$FV_LEGACY_KEY")
+                manual "FileVault is on, but its recovery key is in ~/.filevault/recovery_key.plist (only you can read it). Sign in to 1Password and re-run to move it there."
+            fi
+        elif [ -n "${FV_PLIST:-}" ]; then
+            # fdesetup returned something we couldn't parse. Never discard it:
+            # it may hold the only copy of the recovery key.
+            (umask 077; mkdir -p "$FV_LEGACY_DIR"; printf '%s\n' "$FV_PLIST" > "$FV_LEGACY_KEY")
+            fail "Could not read the FileVault recovery key from fdesetup's output"
+            manual "fdesetup's output is saved in ~/.filevault/recovery_key.plist (only you can read it). Copy the recovery key into 1Password and delete the file, or make a new key with 'sudo fdesetup changerecovery -personal'."
+        else
+            fail "Could not turn on FileVault"
+            manual "Turn on FileVault in System Settings > Privacy & Security and save the recovery key in 1Password."
+        fi
+        unset FV_PLIST FV_KEY
+        ;;
+esac
+
+echo "==> Configuring the application firewall..."
+FW="/usr/libexec/ApplicationFirewall/socketfilterfw"
+
+# State 1 = on, 2 = on and blocking all incoming connections.
+function firewall_on {
+    local out
+    out="$("$FW" --getglobalstate 2>/dev/null || true)"
+    case "$out" in *"State = 1"*|*"State = 2"*) return 0 ;; *) return 1 ;; esac
+}
+# Wording differs by macOS version ("mode is on" / "mode enabled").
+function stealth_on {
+    local out
+    out="$("$FW" --getstealthmode 2>/dev/null || true)"
+    case "$out" in *"mode is on"*|*"mode enabled"*|*"Mode is on"*|*"Mode enabled"*) return 0 ;; *) return 1 ;; esac
+}
+
+if ! firewall_on; then
+    sudo "$FW" --setglobalstate on >/dev/null
+fi
+if ! stealth_on; then
+    sudo "$FW" --setstealthmode on >/dev/null
+fi
+
+if firewall_on; then pass "Firewall is on"; else fail "Firewall is NOT on"; fi
+if stealth_on; then pass "Firewall stealth mode is on"; else fail "Firewall stealth mode is NOT on"; fi
+
+echo "==> Checking Lockdown Mode..."
+# Apple only supports turning Lockdown Mode on in System Settings, and doing so
+# restarts the Mac. So this only checks it here; if it's off, the script opens
+# the setting as its very last step, after the summary.
+# LDMGlobalEnabled in the user's global preferences is 1 when it's on.
+# (Undocumented by Apple; widely used by Mac admins to detect it.)
+LOCKDOWN_PENDING=false
+if [ "$(defaults read -g LDMGlobalEnabled 2>/dev/null || true)" = "1" ]; then
+    pass "Lockdown Mode is on"
+else
+    LOCKDOWN_PENDING=true
+    manual "Turn on Lockdown Mode in System Settings > Privacy & Security (it restarts the Mac), then re-run to confirm."
+fi
 
 ###########################
 #   CORE BREW PACKAGES    #
 ###########################
-# Install essential development tools via Homebrew.
 echo "==> Installing core brew packages..."
 
-# CMake — cross-platform build system generator (needed for YouCompleteMe, etc.).
-brew install cmake
+for pkg in "${BREW_FORMULAE[@]}"; do
+    brew_safe list --formula "$pkg" &>/dev/null || brew_safe install "$pkg"
+done
 
-# Vim — terminal-based text editor (Homebrew version is newer than macOS built-in).
-brew install vim
-
-# Git — version control system (Homebrew version is newer than macOS built-in).
-brew install git
-
-# GitHub CLI — interact with GitHub from the command line (PRs, issues, SSH keys, etc.).
-brew install gh
-
-# Test: Verify each core tool is available.
 verify_cmd cmake
 verify_cmd vim
 verify_cmd git
 verify_cmd gh
+verify_cmd gpg
+verify_cmd pinentry-mac
+verify_cmd pyenv
+verify_cmd yamllint
+verify_cmd rg
+
+echo "==> Installing fonts..."
+# Hack Nerd Font gives Terminal and Vim their powerline symbols and icons.
+# The cask fails if the font was installed by hand, so check for it first.
+if ! brew_safe list --cask font-hack-nerd-font &>/dev/null && \
+   ! ls "$HOME"/Library/Fonts/Hack*Nerd* &>/dev/null; then
+    brew_safe install --cask font-hack-nerd-font
+else
+    echo "  Hack Nerd Font already installed"
+fi
 
 ###########################
 #   PYTHON (pyenv)        #
 ###########################
-# pyenv lets you install and switch between multiple Python versions.
-echo "==> Installing pyenv..."
+echo "==> Configuring pyenv in ~/.zshrc..."
 
-# Install pyenv via Homebrew.
-brew install pyenv
+# Without these lines pyenv is installed but its Pythons are never on PATH.
+if ! grep -q 'pyenv init' "$HOME/.zshrc" 2>/dev/null; then
+    # shellcheck disable=SC2016  # literal lines for ~/.zshrc
+    {
+        echo ''
+        echo '# pyenv (added by setup-os)'
+        echo 'export PYENV_ROOT="$HOME/.pyenv"'
+        echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"'
+        echo 'eval "$(pyenv init - zsh)"'
+    } >> "$HOME/.zshrc"
+fi
 
-# Test: Verify pyenv is available.
-verify_cmd pyenv
-
-###########################
-#   FONTS                 #
-###########################
-# Nerd Fonts patch developer-targeted fonts with a large number of glyphs (icons).
-# Hack Nerd Font is used by terminal and Vim for powerline symbols and devicons.
-echo "==> Installing fonts..."
-
-# Install the Hack Nerd Font as a macOS cask (GUI application/resource).
-# brew --cask fails if the font was installed outside Homebrew.
-# Check if it's already listed by brew or exists in the system font directory.
-if ! brew_safe list --cask font-hack-nerd-font &>/dev/null && \
-   ! ls ~/Library/Fonts/Hack*Nerd* &>/dev/null 2>&1; then
-    brew_safe install --cask font-hack-nerd-font
+if grep -q 'pyenv init' "$HOME/.zshrc" 2>/dev/null; then
+    pass "pyenv is initialized in ~/.zshrc"
 else
-    echo "  Hack Nerd Font already installed, skipping cask install"
+    fail "pyenv init is NOT in ~/.zshrc"
 fi
 
 ###########################
-#   LINTERS               #
+#   NODE (nvm)            #
 ###########################
-# Linters analyze code for errors, style issues, and best practices.
-echo "==> Installing linters..."
+# nvm is the only Node manager (no Homebrew node), so there is one `node` on PATH.
+echo "==> Installing nvm and Node.js LTS..."
 
-# yamllint — linter for YAML files (used for CI configs, Kubernetes manifests, etc.).
-brew_safe install yamllint
+export NVM_DIR="$HOME/.nvm"
+if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+    NVM_INSTALLER="$(mktemp)"
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_INSTALLER"
+    # PROFILE tells the installer which shell file gets the nvm lines.
+    PROFILE="$HOME/.zshrc" bash "$NVM_INSTALLER"
+    rm -f "$NVM_INSTALLER"
+fi
 
-# Test: Verify yamllint is available.
-verify_cmd yamllint
+verify_file "$NVM_DIR/nvm.sh"
 
-# CloudFront linter (disabled — uncomment if working with AWS CloudFormation).
-# brew_safe install cfn-lint
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # nvm is a big shell function whose internal checks return non-zero by
+    # design, and it doesn't support `set -u`. Pause both while it runs.
+    trap - ERR
+    set +u
+    # shellcheck source=/dev/null
+    . "$NVM_DIR/nvm.sh"
+    if nvm install --lts && nvm alias default 'lts/*' >/dev/null; then
+        nvm use default >/dev/null
+        pass "Node.js LTS installed with nvm ($(node --version 2>/dev/null))"
+    else
+        fail "nvm could not install Node.js LTS"
+    fi
+    set -u
+    trap 'on_error $LINENO' ERR
+fi
 
-###########################
-#   RIPGREP               #
-###########################
-# RipGrep (rg) — extremely fast recursive text search tool, used by Vim plugins.
-echo "==> Installing RipGrep..."
-
-# Install ripgrep via Homebrew.
-brew_safe install rg
-
-# Test: Verify rg is available.
-verify_cmd rg
+verify_cmd node
+verify_cmd npm
 
 ###########################
 #   GPG                   #
 ###########################
-# GnuPG is used for signing Git commits and encrypting/decrypting files.
-echo "==> Installing GPG..."
+# Kept for file encryption. Git commits are signed with the SSH key instead.
+echo "==> Configuring GPG..."
 
-# Install GnuPG (the `gpg` command) via Homebrew.
-brew_safe install gnupg
+# GnuPG warns or fails unless its directory is 700.
+mkdir -p "$HOME/.gnupg"
+chmod 700 "$HOME/.gnupg"
 
-# Install pinentry-mac — a macOS-native PIN entry dialog for GPG passphrase prompts.
-brew_safe install pinentry-mac
+# Use the macOS passphrase dialog instead of a terminal prompt.
+append_line "pinentry-program ${BREW_PREFIX}/bin/pinentry-mac" "$HOME/.gnupg/gpg-agent.conf"
+# Restart gpg-agent so it picks up the change. Fine if it wasn't running.
+gpgconf --kill gpg-agent 2>/dev/null || true
 
-# Test: Verify both tools are available.
-verify_cmd gpg
-verify_cmd pinentry-mac
-
-# Ensure the GnuPG config directory exists before writing to its config files.
-# GnuPG requires 700 permissions on this directory — it warns or fails otherwise.
-mkdir -p ~/.gnupg
-chmod 700 ~/.gnupg
-
-# Tell gpg-agent to use pinentry-mac for passphrase prompts instead of the terminal.
-# Only add the line if it's not already present (idempotent).
-grep -qxF "pinentry-program ${BREW_PREFIX}/bin/pinentry-mac" ~/.gnupg/gpg-agent.conf 2>/dev/null || \
-    echo "pinentry-program ${BREW_PREFIX}/bin/pinentry-mac" >> ~/.gnupg/gpg-agent.conf
-
-# Restart gpg-agent so it picks up the new config. Ignore errors if it's not running.
-killall gpg-agent 2>/dev/null || true
-
-# Test: Verify the pinentry line is present in the config file.
-verify_line_in_file "pinentry-program ${BREW_PREFIX}/bin/pinentry-mac" ~/.gnupg/gpg-agent.conf
+verify_line_in_file "pinentry-program ${BREW_PREFIX}/bin/pinentry-mac" "$HOME/.gnupg/gpg-agent.conf"
 
 ###########################
-#   STORE SECRETS IN 1PW  #
+#   SSH (1Password)       #
 ###########################
-# Now that GPG and 1Password are both installed, store any generated secrets.
-# This section runs after GPG setup so keys exist, and after 1Password setup
-# so the `op` CLI is available.
-echo "==> Storing secrets in 1Password..."
+# The private key is generated inside 1Password and served by its SSH agent.
+# It never exists as a file on this Mac.
+echo "==> Configuring SSH with the 1Password agent..."
 
-if [ "${OP_SIGNED_IN:-false}" = "true" ]; then
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+touch "$HOME/.ssh/config"
+chmod 600 "$HOME/.ssh/config"
 
-    # --- Store FileVault recovery key ---
-    # The recovery key plist is generated when FileVault is first enabled.
-    # We store it in 1Password and then securely delete the local copy.
-    if [ "${FILEVAULT_KEY_PENDING:-false}" = "true" ] && [ -f "${FILEVAULT_KEY_PATH:-}" ]; then
-        echo "  Saving FileVault recovery key to 1Password..."
-        # Read the recovery key from the deferred plist file.
-        FILEVAULT_KEY_CONTENT="$(cat "$FILEVAULT_KEY_PATH")"
-        # Create a Secure Note in 1Password with the recovery key content.
-        # --vault defaults to the user's Personal vault if not specified.
-        op item create \
-            --category "Secure Note" \
-            --title "FileVault Recovery Key - $(hostname)" \
-            --vault "Personal" \
-            "notesPlain=$FILEVAULT_KEY_CONTENT" 2>/dev/null \
-            && echo "  [PASS] FileVault recovery key saved to 1Password" \
-            || echo "  [FAIL] Could not save FileVault recovery key to 1Password"
-        # Securely delete the local copy now that it's in 1Password.
-        # rm -P overwrites the file before deleting on macOS (secure delete).
-        rm -P "$FILEVAULT_KEY_PATH" 2>/dev/null || rm -f "$FILEVAULT_KEY_PATH"
-        echo "  Local copy of recovery key has been securely deleted."
-    fi
-
-    # --- Store GPG private key ---
-    # Export the GPG private key for the configured Git email and store it in 1Password.
-    # Only export if a key exists for the configured email address.
-    GPG_EMAIL="github@barrios.io"
-    if gpg --list-secret-keys "$GPG_EMAIL" &>/dev/null; then
-        # Check if this key is already stored in 1Password to avoid duplicates (idempotent).
-        if ! op item get "GPG Private Key - $(hostname)" --vault "Personal" &>/dev/null; then
-            echo "  Exporting GPG private key to 1Password..."
-            # Export the ASCII-armored private key to a temp file with restricted permissions.
-            GPG_KEY_TMP="$(mktemp)"
-            chmod 600 "$GPG_KEY_TMP"
-            gpg --export-secret-keys --armor "$GPG_EMAIL" > "$GPG_KEY_TMP"
-            # Store the exported key as a Secure Note in 1Password.
-            op item create \
-                --category "Secure Note" \
-                --title "GPG Private Key - $(hostname)" \
-                --vault "Personal" \
-                "notesPlain=$(cat "$GPG_KEY_TMP")" 2>/dev/null \
-                && echo "  [PASS] GPG private key saved to 1Password" \
-                || echo "  [FAIL] Could not save GPG private key to 1Password"
-            # Securely delete the temp file containing the exported private key.
-            rm -P "$GPG_KEY_TMP" 2>/dev/null || rm -f "$GPG_KEY_TMP"
-        else
-            echo "  [PASS] GPG private key already exists in 1Password"
-        fi
-    else
-        echo "  [SKIP] No GPG key found for $GPG_EMAIL — generate one and re-run to store it."
-    fi
-
-    # --- Store SSH key ---
-    # If an SSH key exists, store it in 1Password for backup.
-    if [ -f "$HOME/.ssh/id_ed25519" ]; then
-        if ! op item get "SSH Private Key - $(hostname)" --vault "Personal" &>/dev/null; then
-            echo "  Saving SSH private key to 1Password..."
-            op item create \
-                --category "Secure Note" \
-                --title "SSH Private Key - $(hostname)" \
-                --vault "Personal" \
-                "notesPlain=$(cat "$HOME/.ssh/id_ed25519")" 2>/dev/null \
-                && echo "  [PASS] SSH private key saved to 1Password" \
-                || echo "  [FAIL] Could not save SSH private key to 1Password"
-        else
-            echo "  [PASS] SSH private key already exists in 1Password"
-        fi
-    elif [ -f "$HOME/.ssh/id_rsa" ]; then
-        if ! op item get "SSH Private Key - $(hostname)" --vault "Personal" &>/dev/null; then
-            echo "  Saving SSH private key (RSA) to 1Password..."
-            op item create \
-                --category "Secure Note" \
-                --title "SSH Private Key - $(hostname)" \
-                --vault "Personal" \
-                "notesPlain=$(cat "$HOME/.ssh/id_rsa")" 2>/dev/null \
-                && echo "  [PASS] SSH private key saved to 1Password" \
-                || echo "  [FAIL] Could not save SSH private key to 1Password"
-        else
-            echo "  [PASS] SSH private key already exists in 1Password"
-        fi
-    else
-        echo "  [SKIP] No SSH key found at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa"
-    fi
-
+if grep -qiE '^[[:space:]]*IdentityAgent' "$HOME/.ssh/config"; then
+    echo "  ~/.ssh/config already sets an IdentityAgent, leaving it as is"
 else
-    echo "  [SKIP] 1Password CLI is not signed in — secrets will not be stored."
-    echo "  Sign in with 'eval \$(op signin)' and re-run the script to store secrets."
-    if [ "${FILEVAULT_KEY_PENDING:-false}" = "true" ]; then
-        echo "  IMPORTANT: FileVault recovery key is at ${FILEVAULT_KEY_PATH:-unknown}."
-        echo "  Save it manually and then delete the file."
+    if [ -s "$HOME/.ssh/config" ]; then
+        cp "$HOME/.ssh/config" "$HOME/.ssh/config.bak.$(date +%Y%m%d%H%M%S)"
     fi
+    # The ~ is meant literally: ssh expands it itself.
+    # shellcheck disable=SC2088
+    printf '\n# 1Password SSH agent (added by setup-os)\nHost *\n  IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"\n' \
+        >> "$HOME/.ssh/config"
 fi
+
+if grep -qiE '^[[:space:]]*IdentityAgent' "$HOME/.ssh/config"; then
+    pass "SSH config uses an SSH agent"
+else
+    fail "SSH config has no IdentityAgent"
+fi
+
+if [ -S "$OP_AGENT_SOCK" ]; then
+    pass "1Password SSH agent is running"
+else
+    manual "Turn on 1Password > Settings > Developer > 'Use the SSH agent', then re-run."
+fi
+
+SSH_PUBKEY=""
+if [ "$OP_READY" = true ]; then
+    if op item get "$SSH_KEY_TITLE" --vault "$OP_VAULT" &>/dev/null; then
+        echo "  '$SSH_KEY_TITLE' already exists in 1Password"
+    else
+        echo "  Creating Ed25519 key '$SSH_KEY_TITLE' in 1Password..."
+        op item create --category ssh --title "$SSH_KEY_TITLE" --vault "$OP_VAULT" >/dev/null
+    fi
+    # Keep only "<type> <key>", dropping any comment.
+    SSH_PUBKEY="$(op read "op://$OP_VAULT/$SSH_KEY_TITLE/public key" 2>/dev/null | awk '{print $1" "$2}' || true)"
+    case "$SSH_PUBKEY" in
+        ssh-*) pass "SSH key in 1Password: $SSH_PUBKEY" ;;
+        *)     fail "Could not read the public key of '$SSH_KEY_TITLE' from 1Password"; SSH_PUBKEY="" ;;
+    esac
+fi
+
+for old_key in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
+    if [ -f "$old_key" ]; then
+        info "$old_key is a private key on disk. Not touched; import it into 1Password and delete it if you still need it."
+    fi
+done
 
 ###########################
 #   GIT CONFIG            #
 ###########################
-# Configure Git's global settings. git config --global is idempotent —
-# it overwrites the existing value for each key, so re-running is safe.
+# `git config --global` overwrites each key, so re-running is safe.
 echo "==> Configuring Git..."
 
-# Use GnuPG for commit signing.
-git config --global gpg.program gpg
-
-# Use vimdiff as the merge resolution tool.
+git config --global user.name "$GIT_NAME"
+git config --global user.email "$GIT_EMAIL"
+git config --global core.editor "$GIT_EDITOR"
+git config --global init.defaultBranch main
+# Rebase local commits on pull instead of making merge commits; stash and
+# restore uncommitted changes automatically.
+git config --global pull.rebase true
+git config --global rebase.autoStash true
+git config --global push.autoSetupRemote true
+git config --global fetch.prune true
 git config --global merge.tool vimdiff
-
-# Show a three-way diff (ours / base / theirs) during merge conflicts.
-git config --global merge.conflictstyle diff3
-
-# Don't prompt before launching the merge tool for each conflicted file.
+# Like diff3 (ours / base / theirs) but without lines common to both sides.
+git config --global merge.conflictstyle zdiff3
 git config --global mergetool.prompt false
+git config --global mergetool.keepBackup false
 
-# Use merge (not rebase) when pulling — creates merge commits for diverged branches.
-git config --global pull.rebase false
-
-# Set the global Git identity for commits.
-git config --global user.name "JoseBarrios"
-git config --global user.email github@barrios.io
-
-# Test: Verify each git config value matches what we set.
-verify_git_config "gpg.program" "gpg"
+verify_git_config "user.name" "$GIT_NAME"
+verify_git_config "user.email" "$GIT_EMAIL"
+verify_git_config "core.editor" "$GIT_EDITOR"
+verify_git_config "init.defaultBranch" "main"
+verify_git_config "pull.rebase" "true"
+verify_git_config "rebase.autoStash" "true"
+verify_git_config "push.autoSetupRemote" "true"
+verify_git_config "fetch.prune" "true"
 verify_git_config "merge.tool" "vimdiff"
-verify_git_config "merge.conflictstyle" "diff3"
+verify_git_config "merge.conflictstyle" "zdiff3"
 verify_git_config "mergetool.prompt" "false"
-verify_git_config "pull.rebase" "false"
-verify_git_config "user.name" "JoseBarrios"
-verify_git_config "user.email" "github@barrios.io"
+verify_git_config "mergetool.keepBackup" "false"
 
-###########################
-#   NVM                   #
-###########################
-# NVM (Node Version Manager) allows installing and switching between Node.js versions.
-echo "==> Installing NVM..."
+# Global ignore file: an existing core.excludesFile wins, otherwise git's default.
+GIT_IGNORE_GLOBAL="$(git config --global --path core.excludesFile 2>/dev/null || echo "$HOME/.config/git/ignore")"
+mkdir -p "$(dirname "$GIT_IGNORE_GLOBAL")"
+for pattern in '.DS_Store' '*.swp' '*.swo' '.env' '.env.*' '!.env.example'; do
+    append_line "$pattern" "$GIT_IGNORE_GLOBAL"
+done
+verify_line_in_file ".env" "$GIT_IGNORE_GLOBAL"
 
-# Only install if the ~/.nvm directory doesn't exist yet (idempotent).
-if [ ! -d "$HOME/.nvm" ]; then
-    # Download the installer to a temp file, verify it downloaded fully, then execute.
-    NVM_INSTALLER="$(mktemp)"
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh -o "$NVM_INSTALLER"
-    bash "$NVM_INSTALLER"
-    rm -f "$NVM_INSTALLER"
-fi
+# Sign commits and tags with the 1Password SSH key.
+if [ -n "$SSH_PUBKEY" ]; then
+    mkdir -p "$(dirname "$ALLOWED_SIGNERS")"
+    append_line "$GIT_EMAIL namespaces=\"git\" $SSH_PUBKEY" "$ALLOWED_SIGNERS"
 
-# Test: Verify the NVM directory was created.
-verify_dir "$HOME/.nvm"
+    git config --global gpg.format ssh
+    git config --global user.signingkey "$SSH_PUBKEY"
+    git config --global gpg.ssh.program "$OP_SSH_SIGN"
+    git config --global gpg.ssh.allowedSignersFile "$ALLOWED_SIGNERS"
+    git config --global commit.gpgsign true
+    git config --global tag.gpgsign true
 
-###########################
-#   BLUECLOTH (vim-preview) #
-###########################
-# bluecloth is a Ruby gem that renders Markdown — required by the vim-preview plugin.
-echo "==> Installing bluecloth gem..."
-
-# Only install the gem if it's not already present (idempotent).
-if ! gem list -i bluecloth &>/dev/null; then
-    # sudo is required because system Ruby's gem directory is root-owned.
-    sudo gem install bluecloth
-fi
-
-# Test: Verify the gem is installed.
-if gem list -i bluecloth &>/dev/null; then
-    echo "  [PASS] bluecloth gem is installed"
+    verify_git_config "gpg.format" "ssh"
+    verify_git_config "user.signingkey" "$SSH_PUBKEY"
+    verify_git_config "gpg.ssh.program" "$OP_SSH_SIGN"
+    verify_git_config "gpg.ssh.allowedSignersFile" "$ALLOWED_SIGNERS"
+    verify_git_config "commit.gpgsign" "true"
+    verify_git_config "tag.gpgsign" "true"
 else
-    echo "  [FAIL] bluecloth gem is NOT installed"
-    FAIL_COUNT=$((FAIL_COUNT + 1))
+    manual "Commit signing is not set up (no SSH key from 1Password yet). Re-run after signing in to 1Password."
 fi
 
 ###########################
-#   SOLARIZED             #
+#   GITHUB                #
 ###########################
-# Solarized is a popular color scheme for terminals and editors.
-echo "==> Installing Solarized color scheme..."
+echo "==> Connecting GitHub..."
 
-# Only clone the repo if it doesn't already exist (idempotent).
-if [ ! -d "$SETUP_HOME/solarized" ]; then
-    # Clone the Solarized repo which contains terminal profiles and editor themes.
-    git clone https://github.com/altercation/solarized.git
-    # Open the Solarized Dark terminal profile in Terminal.app to make it available.
-    # Only done on first install to avoid opening it every time the script runs.
-    open "$SETUP_HOME/solarized/osx-terminal.app-colors-solarized/xterm-256color/Solarized Dark xterm-256color.terminal"
-fi
-
-# Test: Verify the solarized directory exists.
-verify_dir "$SETUP_HOME/solarized"
-
-###########################
-#   TERMINAL FONT         #
-###########################
-# Set Terminal.app's font to Hack Nerd Font Mono so vim-devicons and
-# powerline glyphs render correctly. The font must already be installed
-# (handled by the Fonts section above).
-echo "==> Configuring Terminal.app font..."
-
-TERMINAL_PROFILE="Solarized Dark xterm-256color"
-TERMINAL_PLIST="$HOME/Library/Preferences/com.apple.Terminal.plist"
-
-# Only set the font if the profile exists in the Terminal plist.
-if /usr/libexec/PlistBuddy -c "Print ':Window Settings:${TERMINAL_PROFILE}:Font'" "$TERMINAL_PLIST" &>/dev/null; then
-    # Use Swift to create an archived NSFont object (the format Terminal.app expects)
-    # and write it to a temp file, then import it into the plist via PlistBuddy.
-    FONT_TMP="$(mktemp)"
-    swift -e "
-import Cocoa
-guard let font = NSFont(name: \"HackNFM-Regular\", size: 14) else { exit(1) }
-let data = try NSKeyedArchiver.archivedData(withRootObject: font, requiringSecureCoding: false)
-try data.write(to: URL(fileURLWithPath: \"${FONT_TMP}\"))
-" 2>/dev/null
-
-    if [ -s "$FONT_TMP" ]; then
-        /usr/libexec/PlistBuddy -c "Import ':Window Settings:${TERMINAL_PROFILE}:Font' ${FONT_TMP}" "$TERMINAL_PLIST"
-        echo "  Set Terminal.app font to Hack Nerd Font Mono (14pt)"
-    else
-        echo "  [WARN] Could not create font data — is Hack Nerd Font installed?"
+GH_READY=false
+if gh auth status -h github.com &>/dev/null; then
+    GH_READY=true
+elif is_interactive; then
+    echo "  Log in to GitHub in your browser:"
+    if gh auth login -h github.com -p ssh -w --skip-ssh-key -s admin:public_key,admin:ssh_signing_key; then
+        GH_READY=true
     fi
-    rm -f "$FONT_TMP"
+fi
+
+if [ "$GH_READY" = true ]; then
+    pass "GitHub CLI is logged in"
+
+    # Add GitHub's host keys from its API (over HTTPS) so the first SSH
+    # connection doesn't ask you to trust an unverified fingerprint.
+    if ! ssh-keygen -F github.com &>/dev/null; then
+        GH_HOST_KEYS="$(gh api meta --jq '.ssh_keys[]' 2>/dev/null || true)"
+        if [ -n "$GH_HOST_KEYS" ]; then
+            printf '%s\n' "$GH_HOST_KEYS" | sed 's/^/github.com /' >> "$HOME/.ssh/known_hosts"
+        fi
+    fi
+    if ssh-keygen -F github.com &>/dev/null; then
+        pass "GitHub host keys are in ~/.ssh/known_hosts"
+    else
+        fail "GitHub host keys are NOT in ~/.ssh/known_hosts"
+    fi
+
+    if [ -n "$SSH_PUBKEY" ]; then
+        # Adding keys needs extra token scopes; ask for them only if missing.
+        if ! gh api user/keys &>/dev/null || ! gh api user/ssh_signing_keys &>/dev/null; then
+            if is_interactive; then
+                echo "  GitHub needs permission to manage your SSH keys:"
+                gh auth refresh -h github.com -s admin:public_key,admin:ssh_signing_key || true
+            fi
+        fi
+        add_github_key "user/keys" "authentication"
+        add_github_key "user/ssh_signing_keys" "signing"
+
+        if [ -S "$OP_AGENT_SOCK" ]; then
+            # ssh -T exits 1 even on success, so check its message instead.
+            SSH_TEST="$(ssh -T -o ConnectTimeout=10 git@github.com 2>&1 || true)"
+            case "$SSH_TEST" in
+                *"successfully authenticated"*) pass "SSH to GitHub works" ;;
+                *) fail "SSH to GitHub failed: $SSH_TEST" ;;
+            esac
+
+            # Sign a throwaway commit (1Password asks you to approve), then verify
+            # it with plain ssh-keygen, which needs no agent.
+            SIGN_TMP="$(mktemp -d)"
+            if git -C "$SIGN_TMP" init -q && \
+               git -C "$SIGN_TMP" commit -q --allow-empty -m "setup-os signing test" && \
+               git -C "$SIGN_TMP" -c gpg.ssh.program=ssh-keygen verify-commit HEAD &>/dev/null; then
+                pass "Signed and verified a test commit"
+            else
+                fail "Commit signing test failed (approve the 1Password prompt and check the SSH agent is on)"
+            fi
+            rm -rf "$SIGN_TMP"
+        fi
+    fi
 else
-    echo "  [WARN] Terminal profile '${TERMINAL_PROFILE}' not found — skipping font config"
+    manual "Run 'gh auth login', then re-run to add your SSH key to GitHub."
 fi
 
 ###########################
-#   FINDER CONFIG         #
+#   TERMINAL              #
 ###########################
-# Configure macOS Finder to show hidden files (dotfiles) by default.
+echo "==> Installing Solarized and configuring Terminal.app..."
+
+SOLARIZED_DIR="$SETUP_HOME/solarized"
+if [ ! -d "$SOLARIZED_DIR" ]; then
+    git clone https://github.com/altercation/solarized.git "$SOLARIZED_DIR"
+fi
+verify_dir "$SOLARIZED_DIR"
+
+# Opening the .terminal file imports the profile into Terminal.app.
+if ! terminal_has_profile; then
+    open "$SOLARIZED_DIR/osx-terminal.app-colors-solarized/xterm-256color/${TERMINAL_PROFILE}.terminal"
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if terminal_has_profile; then break; fi
+        sleep 1
+    done
+fi
+
+# Set font and default profile through Terminal itself (AppleScript). Editing
+# its plist directly gets overwritten when Terminal quits.
+if terminal_has_profile; then
+    osascript \
+        -e "tell application \"Terminal\"" \
+        -e "set s to settings set \"$TERMINAL_PROFILE\"" \
+        -e "set font name of s to \"$TERMINAL_FONT\"" \
+        -e "set font size of s to $TERMINAL_FONT_SIZE" \
+        -e "set default settings to s" \
+        -e "try" \
+        -e "set startup settings to s" \
+        -e "end try" \
+        -e "end tell" >/dev/null
+    TERMINAL_ACTUAL_FONT="$(osascript -e "tell application \"Terminal\" to get font name of settings set \"$TERMINAL_PROFILE\"" 2>/dev/null || true)"
+    if [ "$TERMINAL_ACTUAL_FONT" = "$TERMINAL_FONT" ]; then
+        pass "Terminal uses '$TERMINAL_PROFILE' with $TERMINAL_FONT ${TERMINAL_FONT_SIZE}pt"
+    else
+        fail "Terminal font is '$TERMINAL_ACTUAL_FONT', expected $TERMINAL_FONT (is Hack Nerd Font installed?)"
+    fi
+else
+    fail "Terminal profile '$TERMINAL_PROFILE' was not imported"
+fi
+
+###########################
+#   FINDER                #
+###########################
 echo "==> Configuring Finder..."
 
-# Write the preference to show hidden files. This is idempotent — writing the
-# same value again has no effect.
-defaults write com.apple.finder AppleShowAllFiles -bool true
+# Show hidden files. Finder only picks this up after a restart.
+if [ "$(defaults read com.apple.finder AppleShowAllFiles 2>/dev/null || true)" != "1" ]; then
+    defaults write com.apple.finder AppleShowAllFiles -bool true
+    killall Finder 2>/dev/null || true
+fi
 
-# Test: Verify the setting was applied (defaults read returns "1" for true).
 verify_defaults com.apple.finder AppleShowAllFiles "1"
 
 ###########################
-#   OH MY ZSH             #
+#   VIM                   #
 ###########################
-# Oh My Zsh is a framework for managing Zsh configuration with plugins and themes.
-echo "==> Installing Oh My Zsh..."
-
-# Only install if the ~/.oh-my-zsh directory doesn't exist yet (idempotent).
-if [ ! -d "$HOME/.oh-my-zsh" ]; then
-    # Download the installer to a temp file, verify it downloaded fully, then execute.
-    # --unattended prevents it from changing the default shell or starting a new session.
-    OMZ_INSTALLER="$(mktemp)"
-    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$OMZ_INSTALLER"
-    sh "$OMZ_INSTALLER" "" --unattended
-    rm -f "$OMZ_INSTALLER"
-fi
-
-# Test: Verify the Oh My Zsh directory was created.
-verify_dir "$HOME/.oh-my-zsh"
-
-###########################
-#   VIM SETUP             #
-###########################
-# Run the separate Vim setup script which installs Vundle, plugins, and symlinks.
-# Use the absolute path derived from the repo root so it works from any working directory.
-echo "==> Running VIM setup..."
+echo "==> Running Vim setup..."
 /bin/bash "$REPO_ROOT/app/vim/vim-setup.sh"
 
-# Install dependencies for the coc.nvim plugin (VS Code-like completion for Vim).
-# Only run if the coc.nvim plugin directory exists (it's installed by Vundle).
-# Use a subshell so the `cd` doesn't change the working directory for the rest of the script.
-# The bundle directory is in ~/setup/vim/ (not the repo) since artifacts live there.
+# coc.nvim (VS Code style completion) needs its Node dependencies.
 if [ -d "$SETUP_HOME/vim/bundle/coc.nvim" ]; then
     (cd "$SETUP_HOME/vim/bundle/coc.nvim" && npm install)
 fi
@@ -733,13 +835,42 @@ fi
 ###########################
 #   SUMMARY               #
 ###########################
-# Print a final report of all verification tests.
 echo ""
 echo "==============================="
 if [ "$FAIL_COUNT" -eq 0 ]; then
-    echo "  ALL TESTS PASSED"
+    echo "  ALL CHECKS PASSED"
 else
-    echo "  $FAIL_COUNT TEST(S) FAILED"
+    echo "  $FAIL_COUNT CHECK(S) FAILED"
     echo "  Run 'claude' to debug failures."
 fi
+if [ -n "$MANUAL_NOTES" ]; then
+    echo ""
+    echo "  Still needs you:"
+    printf '%s' "$MANUAL_NOTES"
+fi
 echo "==============================="
+
+###########################
+#   LOCKDOWN MODE (LAST)  #
+###########################
+# Last on purpose: turning it on restarts the Mac. Lockdown Mode blocks
+# configuration profiles / MDM enrollment, some web fonts and features, and
+# unapproved wired accessories while locked. Brew, git, ssh and 1Password work.
+if [ "$LOCKDOWN_PENDING" = true ] && is_interactive; then
+    echo ""
+    echo "==> Last step: turn on Lockdown Mode"
+    echo "  This restarts your Mac, so save your work first. In the window that opens:"
+    echo "    Privacy & Security > Lockdown Mode > Turn On > Turn on Lockdown Mode > Turn On & Restart"
+    echo "  After the restart, re-run this script to confirm it's on."
+    LOCKDOWN_REPLY=""
+    read -r -p "  Press Enter to open the setting (or type s to skip for now): " LOCKDOWN_REPLY
+    if [ "$LOCKDOWN_REPLY" != "s" ]; then
+        open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
+    fi
+fi
+
+if [ "$FAIL_COUNT" -eq 0 ]; then
+    exit 0
+else
+    exit 1
+fi

@@ -16,6 +16,6 @@ sudo apt install git
 
 # Editor
 sudo apt install vim
-./app/vim/setup-vim.sh
+./app/vim/vim-setup.sh
 
 

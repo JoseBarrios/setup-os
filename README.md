@@ -1,0 +1,80 @@
+# setup-os
+
+Setup scripts for my machines. The Mac script is [`os/mac/osx.sh`](os/mac/osx.sh); [`os/mac/README.md`](os/mac/README.md) explains what it does.
+
+## New Mac: start here
+
+Steps 1 to 4 get Claude Code running with this repo and `~/Developer/ai`. In step 5, Claude helps with the rest.
+
+### 1. By hand
+
+1. Finish Setup Assistant. If it offers FileVault, choose **Not Now**: the script turns it on and saves the recovery key in 1Password.
+2. Name the Mac in **System Settings > General > About > Name**. The SSH key and FileVault recovery key are saved in 1Password under this name.
+3. Update macOS in **System Settings > General > Software Update**.
+4. Install [1Password](https://1password.com/downloads/mac) and sign in. In **Settings > Developer**, turn on **Use the SSH agent** and **Integrate with 1Password CLI**.
+5. Install the [Claude app](https://claude.ai/download) and sign in.
+
+### 2. Install Claude Code and get this repo
+
+In Terminal, install Apple's Command Line Tools (for git). Click **Install** in the window that opens and wait for it to finish:
+
+```sh
+xcode-select --install
+```
+
+Then:
+
+```sh
+# Claude Code
+curl -fsSL https://claude.ai/install.sh | bash
+grep -qs '.local/bin' ~/.zprofile || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+export PATH="$HOME/.local/bin:$PATH"
+claude --version
+
+# This repo. It's public, so no SSH key is needed yet.
+mkdir -p ~/Developer
+git clone https://github.com/JoseBarrios/setup-os.git ~/Developer/setup-os
+```
+
+### 3. Copy `~/Developer/ai` from another Mac
+
+It has no remote, so it moves as a git bundle. On a Mac that has it:
+
+```sh
+cd ~/Developer/ai
+git status        # commit anything pending first
+git bundle create ~/Desktop/ai.bundle --all
+```
+
+AirDrop `ai.bundle` to the new Mac. If the Macs use different Apple IDs, set AirDrop on the new Mac to **Everyone for 10 Minutes**. Then on the new Mac:
+
+```sh
+git clone ~/Downloads/ai.bundle ~/Developer/ai
+git -C ~/Developer/ai remote remove origin
+rm ~/Downloads/ai.bundle
+```
+
+Delete `ai.bundle` from the other Mac's Desktop too. `private/` isn't in the bundle on purpose, and the two copies don't sync on their own.
+
+### 4. Start Claude Code
+
+```sh
+cd ~/Developer/setup-os
+claude
+```
+
+Log in when the browser opens, then type **Set up this Mac**. Claude follows [`CLAUDE.md`](CLAUDE.md).
+
+### 5. Run the setup script with Claude
+
+Claude first sets up `~/Developer/ai`: its git hooks, your skills as a Claude Code plugin, and `~/.claude/CLAUDE.md` so every session follows `AGENTS.md`.
+
+Claude can't type passwords, so you run the script in a second Terminal tab (⌘T) while Claude explains each prompt and fixes anything that fails:
+
+```sh
+~/Developer/setup-os/os/mac/osx.sh
+```
+
+At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude switches this repo to SSH, checks everything and lists what's left.
+
+Last, run the script again and press Enter at the Lockdown Mode step. After the restart, run it once more: it should end with **ALL CHECKS PASSED** and nothing under **Still needs you**.
