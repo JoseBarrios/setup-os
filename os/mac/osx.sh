@@ -76,6 +76,14 @@ CLAUDE_DENY_RULES='["Read(~/.ssh/**)","Read(~/.gnupg/**)","Read(~/.filevault/**)
 # Claude in Chrome's Chrome Web Store ID.
 CLAUDE_CHROME_EXT_ID="fcoeoabgfenejglbffodgkkbkcdhcgfn"
 
+# Keep the Mac awake so Claude on it stays reachable from your phone.
+# auto: desktop Macs only (no battery, like a Mac mini). 1: always. 0: never.
+# Override with: KEEP_AWAKE=1 ./osx.sh
+KEEP_AWAKE="${KEEP_AWAKE:-auto}"
+AMPHETAMINE_APP_ID="937984704"
+LOGIN_APPS_LABEL="local.setup-os.login-apps"
+LOGIN_APPS_PLIST="$HOME/Library/LaunchAgents/$LOGIN_APPS_LABEL.plist"
+
 # FileVault personal recovery keys look like XXXX-XXXX-XXXX-XXXX-XXXX-XXXX.
 FV_KEY_REGEX='^[A-Z0-9]{4}(-[A-Z0-9]{4}){5}$'
 
@@ -245,6 +253,12 @@ function add_github_key {
 
 function terminal_has_profile {
     [ "$(osascript -e "tell application \"Terminal\" to exists settings set \"$TERMINAL_PROFILE\"" 2>/dev/null)" = "true" ]
+}
+
+# Current value of a power setting from `pmset -g` (e.g. sleep), or empty.
+# Usage: pmset_value <setting>
+function pmset_value {
+    pmset -g 2>/dev/null | awk -v k="$1" '$1 == k { print $2; exit }'
 }
 
 # Print a git remote URL without any user or token in it.
@@ -684,6 +698,108 @@ if ls -d "$HOME/Library/Application Support/Google/Chrome/"*/Extensions/"$CLAUDE
     pass "Claude in Chrome is installed"
 else
     manual "Install Claude in Chrome: open https://chromewebstore.google.com/detail/claude/$CLAUDE_CHROME_EXT_ID in Chrome, click Add to Chrome, sign in with your Claude account and pin it. Then in the Claude app: Settings > Connectors > Claude in Chrome > Configure, and turn it on."
+fi
+
+###########################
+#   KEEP AWAKE            #
+###########################
+# Claude on your phone can only use this Mac (its apps, files and local
+# tools) while the Mac is awake and the Claude app is running. On a desktop:
+# - pmset turns system sleep off, which works even at the login window, and
+#   starts the Mac again after a power cut. The display can still sleep.
+# - Amphetamine (Mac App Store) adds a menu bar switch for it.
+# - A login item opens Claude and Amphetamine whenever you log in.
+echo "==> Keeping this Mac awake for Claude..."
+
+KEEP_AWAKE_SKIP="Skipped (KEEP_AWAKE=$KEEP_AWAKE). Earlier changes are left as they are."
+if [ "$KEEP_AWAKE" = "auto" ]; then
+    if pmset -g batt 2>/dev/null | grep -q "InternalBattery"; then
+        KEEP_AWAKE=0
+        KEEP_AWAKE_SKIP="This Mac has a battery, so it can still sleep. KEEP_AWAKE=1 ./osx.sh keeps it awake."
+    else
+        KEEP_AWAKE=1
+    fi
+fi
+
+if [ "$KEEP_AWAKE" != "1" ]; then
+    info "$KEEP_AWAKE_SKIP"
+else
+    [ "$(pmset_value sleep)" = "0" ] || sudo pmset -a sleep 0
+    if [ "$(pmset_value sleep)" = "0" ]; then
+        pass "System sleep is off (pmset sleep 0)"
+    else
+        fail "System sleep is still on (pmset sleep is '$(pmset_value sleep)')"
+    fi
+    # Only desktops have this setting; laptops don't list it.
+    if [ -n "$(pmset_value autorestart)" ]; then
+        [ "$(pmset_value autorestart)" = "1" ] || sudo pmset -a autorestart 1
+        if [ "$(pmset_value autorestart)" = "1" ]; then
+            pass "The Mac starts again after a power cut (pmset autorestart 1)"
+        else
+            fail "pmset autorestart is not 1"
+        fi
+    fi
+
+    # Amphetamine is only on the Mac App Store. mas gets it when you're
+    # signed in to the App Store (it asks for your password via sudo).
+    AMPHETAMINE_NEW=false
+    if [ ! -d "/Applications/Amphetamine.app" ]; then
+        command -v mas &>/dev/null || brew_safe install mas
+        if command -v mas &>/dev/null && mas get "$AMPHETAMINE_APP_ID"; then
+            AMPHETAMINE_NEW=true
+        fi
+    fi
+    if [ -d "/Applications/Amphetamine.app" ]; then
+        pass "Amphetamine is installed"
+        if [ "$AMPHETAMINE_NEW" = true ]; then
+            # Its settings can't be scripted. pmset already keeps the Mac awake.
+            manual "In Amphetamine's settings, have it start a session when it launches, set to Indefinitely. The script opens it at login."
+        fi
+    else
+        manual "Install Amphetamine: sign in to the App Store, then re-run (or get it from https://apps.apple.com/app/amphetamine/id$AMPHETAMINE_APP_ID)."
+    fi
+
+    # Open Claude and Amphetamine at every login. A LaunchAgent needs no
+    # permission prompt; macOS lists it under Login Items.
+    mkdir -p "$(dirname "$LOGIN_APPS_PLIST")"
+    LOGIN_APPS_TMP="$(mktemp)"
+    cat > "$LOGIN_APPS_TMP" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LOGIN_APPS_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>for app in Claude Amphetamine; do if [ -d "/Applications/\$app.app" ]; then /usr/bin/open -g -a "/Applications/\$app.app"; fi; done</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+    if ! cmp -s "$LOGIN_APPS_TMP" "$LOGIN_APPS_PLIST"; then
+        cat "$LOGIN_APPS_TMP" > "$LOGIN_APPS_PLIST"
+    fi
+    rm -f "$LOGIN_APPS_TMP"
+    if plutil -lint "$LOGIN_APPS_PLIST" >/dev/null 2>&1; then
+        pass "Claude and Amphetamine open at login ($LOGIN_APPS_LABEL)"
+    else
+        fail "$LOGIN_APPS_PLIST is not a valid plist"
+    fi
+    # And now, in the background, if they aren't running.
+    for app in Claude Amphetamine; do
+        if [ -d "/Applications/$app.app" ]; then
+            open -g -a "/Applications/$app.app" 2>/dev/null || true
+        fi
+    done
+
+    # FileVault turns off automatic login, so after any restart nothing runs
+    # until someone logs in. fdesetup authrestart only skips the unlock screen.
+    info "After a restart (power cut, macOS update), Claude is offline until you log in on this Mac: FileVault turns off automatic login."
 fi
 
 ###########################

@@ -27,7 +27,8 @@ Jose has done steps 1 and 2 of `README.md`. You can't answer password, sudo or b
    - `launchctl print gui/$(id -u)/io.barrios.ai-sync` finds the ai repo's hourly GitHub sync (the script installs it with `~/Developer/ai/scripts/install-sync.sh`)
    - `~/.claude/CLAUDE.md` has the line `@~/Developer/ai/AGENTS.md`
    - `claude plugin list` shows `jose-skills@barrios-ai`
-5. **Hand off.** List what's left, including the script's "Still needs you" items (signing in to the Claude app and adding Claude in Chrome, if listed). Last, Jose re-runs the script and presses Enter at the Lockdown Mode step. After the restart he runs it once more to confirm everything passes.
+   - On a desktop Mac (`pmset -g batt` lists no `InternalBattery`): `pmset -g` shows `sleep 0` and `autorestart 1`, `/Applications/Amphetamine.app` exists, and `~/Library/LaunchAgents/local.setup-os.login-apps.plist` exists
+5. **Hand off.** List what's left, including the script's "Still needs you" items (signing in to the Claude app, adding Claude in Chrome and Amphetamine's settings, if listed). Last, Jose re-runs the script and presses Enter at the Lockdown Mode step. After the restart he runs it once more to confirm everything passes.
 
 ## When Jose says "Sync the ai repo"
 

@@ -56,7 +56,9 @@ Claude can't type passwords, so you run the script in a second Terminal tab (⌘
 
 Once your SSH key is on GitHub, the script pulls `~/Developer/ai` (private, so over SSH), turns on its hourly GitHub sync, and sets up Claude Code from it: every session follows its `AGENTS.md`, and your skills install as a plugin. `private/` in that repo isn't in git, so copy anything you need from it from another Mac.
 
-At the Advanced Data Protection prompt, press Enter and turn it on; it doesn't restart the Mac. If an ai repo sync prompt appears, press Enter: Claude Code syncs `~/Developer/ai` with GitHub in that tab; type `/exit` when it's done. At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude checks everything and lists what's left, such as signing in to the Claude app and adding Claude in Chrome.
+On a desktop Mac like a Mac mini, it also turns sleep off, installs Amphetamine and opens the Claude app at login, so Claude on your phone can always reach this Mac. After a restart, log in on the Mac to bring Claude back: FileVault turns off automatic login.
+
+At the Advanced Data Protection prompt, press Enter and turn it on; it doesn't restart the Mac. If an ai repo sync prompt appears, press Enter: Claude Code syncs `~/Developer/ai` with GitHub in that tab; type `/exit` when it's done. At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude checks everything and lists what's left, such as signing in to the Claude app, adding Claude in Chrome and setting up Amphetamine.
 
 Last, run the script again and press Enter at the Lockdown Mode step. After the restart, run it once more: it should end with **ALL CHECKS PASSED** and nothing under **Still needs you**.
 

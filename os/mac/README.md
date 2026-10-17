@@ -2,7 +2,7 @@
 
 > **New Mac?** Start with [New Mac: start here](../../README.md#new-mac-start-here). It gets Claude Code running first so Claude can help with this script.
 
-Sets up a Mac for development and for Claude: security settings, Homebrew and dev tools, the Claude desktop app, Claude Code and Chrome, a Vim-centred editor setup, and Git, SSH and GitHub with keys that live in 1Password. Then it pulls `~/Developer/ai` from GitHub and configures Claude Code from it. It is **idempotent**: re-run it any time, and it only changes what is missing.
+Sets up a Mac for development and for Claude: security settings, Homebrew and dev tools, the Claude desktop app, Claude Code and Chrome, a Vim-centred editor setup, and Git, SSH and GitHub with keys that live in 1Password. Then it pulls `~/Developer/ai` from GitHub and configures Claude Code from it. On a desktop Mac (like a Mac mini) it also keeps the Mac awake, so Claude on it stays reachable from your phone. It is **idempotent**: re-run it any time, and it only changes what is missing.
 
 ## Quick Start
 
@@ -16,6 +16,7 @@ Optional overrides:
 
 - `OP_VAULT=<name>` picks the 1Password vault. By default it uses `Personal`, `Private` or `Employee`, whichever exists.
 - `AI_REPO=<owner/name>` picks the GitHub repo cloned into `~/Developer/ai`. Default: `JoseBarrios/ai`.
+- `KEEP_AWAKE=1` keeps any Mac awake, laptops included; `KEEP_AWAKE=0` skips it. Default: desktop Macs only. See [Keep awake](#keep-awake).
 
 ## What It Does
 
@@ -33,6 +34,7 @@ Steps run in this order.
 | Advanced Data Protection | If the Mac is signed in to iCloud, checks whether you've confirmed it's on. If not, it's guided at the end (see below). |
 | Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq uv shellcheck`, plus the Hack Nerd Font. `jq` edits Claude Code's settings, `uv` runs Python MCP servers (`uvx`), `shellcheck` lints this script. |
 | Claude apps | Installs the Claude desktop app and Google Chrome (skipped if already in `/Applications`; both update themselves). Checks Chrome for Claude in Chrome and, if it's missing, tells you where to get it. |
+| Keep awake | Desktop Macs only: turns system sleep off, starts the Mac again after a power cut, installs Amphetamine, and opens Claude and Amphetamine at login. See [Keep awake](#keep-awake). |
 | pyenv | Adds pyenv's init lines to `~/.zshrc`. |
 | Node | Installs nvm and the current Node.js LTS. nvm is the only Node manager. |
 | GPG | Sets `pinentry-mac` for passphrase prompts. Kept for file encryption; Git signing uses SSH. |
@@ -62,6 +64,19 @@ While it's on: configuration profiles and MDM enrollment are blocked, some web f
 Without it, Apple holds the keys to most iCloud data, including iCloud Drive, Photos, Notes and device backups. With it, only your devices can decrypt that data. Turning it on once covers every device on your Apple Account.
 
 Apple only supports turning it on by hand in **System Settings > your name > iCloud > Advanced Data Protection**. It needs two-factor authentication, a recovery contact or recovery key (keep the key in 1Password), and every device on the account up to date. Apple offers no way for a script to read whether it's on, so the script records your confirmation in `~/setup/.adp-confirmed` and shows it as confirmed on later runs. Delete that file to be asked again.
+
+### Keep awake
+
+Claude on your phone can use this Mac only while the Mac is awake and the Claude app is running. On a desktop Mac (no battery), the script:
+
+- Turns system sleep off (`pmset -a sleep 0`). The display still sleeps.
+- Starts the Mac again after a power cut (`pmset -a autorestart 1`).
+- Installs [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) from the Mac App Store with `mas`, which needs you signed in to the App Store. Its settings can't be scripted, so the first time, set it to start a session when it launches, **Indefinitely**.
+- Adds a login item (`~/Library/LaunchAgents/local.setup-os.login-apps.plist`) that opens Claude and Amphetamine each time you log in, and opens them now.
+
+Laptops are skipped, since they'd drain the battery. `KEEP_AWAKE=1` turns this on for any Mac (laptops have no power-cut setting, so that step is skipped); `KEEP_AWAKE=0` skips it but doesn't undo an earlier run.
+
+After a restart (a power cut or a macOS update), Claude is offline until you log in on the Mac: FileVault, which this script turns on, turns off automatic login.
 
 ### The AI repo
 
@@ -135,6 +150,7 @@ The global ignore file (`~/.config/git/ignore`, or your existing `core.excludesF
 
 - **Existing private keys on disk** (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`) are left alone. Import them into 1Password and delete them if you still need them.
 - **Signing in** to the Claude app, Claude Code and Claude in Chrome. The summary reminds you about the app when it's first installed, and lists Claude Code until it's logged in and Claude in Chrome until it's installed.
+- **Amphetamine:** signing in to the App Store so it can install, and its settings (see [Keep awake](#keep-awake)).
 
 ## Secrets
 
