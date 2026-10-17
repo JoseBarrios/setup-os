@@ -51,7 +51,8 @@ BREW_FORMULAE=(cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq she
 # uv runs Python MCP servers (uvx). Homebrew always installs the newest uv,
 # which is usually only days old, so a release at least 7 days old is pinned
 # here instead, checked by SHA-256. It goes in ~/.local/bin, so it needs no
-# administrator; `uv self update` updates it.
+# administrator. To update it, set UV_VERSION and both SHA-256s to a release
+# at least 7 days old and re-run.
 UV_VERSION="0.13.0"
 UV_SHA256_AARCH64="a9c1b29002cf3c83f07fa9cd8a887a3be0107d90e23189721221e7257db8e3d6"
 UV_SHA256_X86_64="5f44dcbde809b632f47c36fadb241cb4d6f9af71d0c8f172b5d2026d3dde742c"
@@ -797,8 +798,8 @@ unset ICLOUD_ACCOUNTS
 ###########################
 echo "==> Installing core brew packages..."
 
-# One install for everything missing, so a standard account is asked for an
-# administrator only once.
+# One install for every missing formula, so a standard account is asked for
+# an administrator once for all of them. (Each missing app asks separately.)
 BREW_MISSING=()
 for pkg in "${BREW_FORMULAE[@]}"; do
     brew_safe list --formula "$pkg" &>/dev/null || BREW_MISSING+=("$pkg")
@@ -806,9 +807,14 @@ done
 if [ "${#BREW_MISSING[@]}" -gt 0 ]; then
     brew_install "${BREW_MISSING[@]}"
 fi
-# A uv that's already here (Homebrew's, or one updated with uv self update)
-# is left as is.
-if ! command -v uv &>/dev/null; then
+# The uv in ~/.local/bin is reinstalled when UV_VERSION changes. Any other uv
+# (Homebrew's, on the hub Mac) is left as is.
+if [ -x "$HOME/.local/bin/uv" ]; then
+    case "$("$HOME/.local/bin/uv" --version 2>/dev/null || true)" in
+        "uv $UV_VERSION"|"uv $UV_VERSION "*) ;;
+        *) install_uv ;;
+    esac
+elif ! command -v uv &>/dev/null; then
     install_uv
 fi
 
@@ -822,7 +828,16 @@ verify_cmd pyenv
 verify_cmd yamllint
 verify_cmd rg
 verify_cmd jq
-verify_cmd uv
+# The copy in ~/.local/bin must be the pinned one, so a failed reinstall
+# isn't hidden by the old binary.
+if [ -x "$HOME/.local/bin/uv" ]; then
+    case "$("$HOME/.local/bin/uv" --version 2>/dev/null || true)" in
+        "uv $UV_VERSION"|"uv $UV_VERSION "*) pass "uv $UV_VERSION is installed" ;;
+        *) fail "~/.local/bin/uv is not uv $UV_VERSION" ;;
+    esac
+else
+    verify_cmd uv
+fi
 verify_cmd shellcheck
 
 echo "==> Installing fonts..."
@@ -1004,7 +1019,8 @@ fi
 ###########################
 #   NODE (nvm)            #
 ###########################
-# nvm is the only Node manager (no Homebrew node), so there is one `node` on PATH.
+# nvm is the only Node manager this script installs (no Homebrew node), and
+# its Node comes first on PATH, even if Homebrew's owner installed node.
 echo "==> Installing nvm and Node.js LTS..."
 
 export NVM_DIR="$HOME/.nvm"
@@ -1023,13 +1039,23 @@ if [ -s "$NVM_DIR/nvm.sh" ]; then
     # design, and it doesn't support `set -u`. Pause both while it runs.
     trap - ERR
     set +u
+    # Run from a shell that already loaded nvm, PATH has nvm's Node after
+    # Homebrew's (brew shellenv went first). nvm use swaps that entry where it
+    # is instead of moving it first, so Homebrew's node would win. Take nvm's
+    # entries out, and nvm use puts its Node first.
+    PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vF "$NVM_DIR/" | paste -sd: -)"
     # shellcheck source=/dev/null
     . "$NVM_DIR/nvm.sh"
-    if nvm install --lts && nvm alias default 'lts/*' >/dev/null; then
+    # The newest LTS published at least 7 days ago. (nvm install --lts takes
+    # the newest, even one released today.) Node's index lists newest first.
+    NODE_LTS="$(curl -fsSL https://nodejs.org/dist/index.json 2>/dev/null \
+        | jq -r --arg cutoff "$(date -v-7d +%Y-%m-%d)" \
+            '[.[] | select(.lts != false and .date <= $cutoff)][0].version // empty' 2>/dev/null)"
+    if [ -n "$NODE_LTS" ] && nvm install "$NODE_LTS" && nvm alias default "$NODE_LTS" >/dev/null; then
         nvm use default >/dev/null
         pass "Node.js LTS installed with nvm ($(node --version 2>/dev/null))"
     else
-        fail "nvm could not install Node.js LTS"
+        fail "nvm could not install Node.js LTS (needs curl, jq and nodejs.org)"
     fi
     set -u
     trap 'on_error $LINENO' ERR
@@ -1291,6 +1317,8 @@ echo "==> Getting the AI repo (~/Developer/ai) from GitHub..."
 AI_READY=false
 # Set by ai_repo_pull when this copy and GitHub need a merge.
 AI_NEEDS_SYNC=false
+# Set below when neither this copy nor GitHub has scripts/install-sync.sh.
+AI_SYNC_NOT_ON_GITHUB=false
 if [ -d "$AI_DIR" ] && [ ! -d "$AI_DIR/.git" ] && [ -z "$(ls -A "$AI_DIR" 2>/dev/null)" ]; then
     # An empty folder: git clones into it.
     rmdir "$AI_DIR" 2>/dev/null || true
@@ -1319,7 +1347,23 @@ else
 fi
 
 if [ "$AI_READY" = true ]; then
-    # Its pre-commit hook scans every commit for secrets.
+    # private/ is gitignored, so it never comes from GitHub.
+    if [ ! -d "$AI_DIR/private" ]; then
+        info "~/Developer/ai/private/ isn't in git. Copy anything you need from it from another Mac."
+    fi
+    # The repo's own setup, once per clone and safe to re-run: its git hooks,
+    # commits pinned to github@barrios.io, object checks on fetch, and op-sa
+    # in ~/.local/bin. It also makes private/ with an empty blocklist.
+    if [ -x "$AI_DIR/scripts/setup.sh" ]; then
+        if "$AI_DIR/scripts/setup.sh" >/dev/null && \
+           [ "$(git -C "$AI_DIR" config --get fetch.fsckObjects 2>/dev/null || true)" = "true" ]; then
+            pass "~/Developer/ai is hardened (its scripts/setup.sh)"
+        else
+            fail "~/Developer/ai/scripts/setup.sh failed"
+        fi
+    fi
+    # Its pre-commit hook scans every commit for secrets. Set here too, for a
+    # copy without scripts/setup.sh.
     git -C "$AI_DIR" config core.hooksPath scripts/hooks
     if [ "$(git -C "$AI_DIR" config --get core.hooksPath 2>/dev/null || true)" != "scripts/hooks" ]; then
         fail "core.hooksPath is not set in ~/Developer/ai"
@@ -1327,10 +1371,6 @@ if [ "$AI_READY" = true ]; then
         fail "~/Developer/ai/scripts/hooks/pre-commit is missing or not executable, so commits aren't scanned for secrets"
     else
         pass "~/Developer/ai scans each commit for secrets (pre-commit hook)"
-    fi
-    # private/ is gitignored, so it never comes from GitHub.
-    if [ ! -d "$AI_DIR/private" ]; then
-        info "~/Developer/ai/private/ isn't in git. Copy anything you need from it from another Mac."
     fi
     # The repo's own hourly GitHub sync (a launchd job): it fast-forwards when
     # behind, pushes when ahead, and never merges or force-pushes. Re-running
@@ -1342,8 +1382,13 @@ if [ "$AI_READY" = true ]; then
             fail "Could not turn on the hourly ~/Developer/ai sync (scripts/install-sync.sh)"
         fi
     else
-        # Not in this copy, so not on GitHub either when the copy is current.
-        manual "~/Developer/ai has no scripts/install-sync.sh, so its hourly GitHub sync isn't on. Once the ai repo on GitHub has it, re-run this script."
+        # If GitHub has it (as of the last fetch), this copy just wasn't
+        # pulled, and the sync check near the end offers to sort that out.
+        if git -C "$AI_DIR" rev-parse -q --verify '@{upstream}' >/dev/null 2>&1 && \
+           ! git -C "$AI_DIR" cat-file -e '@{upstream}:scripts/install-sync.sh' 2>/dev/null; then
+            AI_SYNC_NOT_ON_GITHUB=true
+            manual "The ai repo has no scripts/install-sync.sh, on GitHub either, so its hourly GitHub sync isn't on. Once the ai repo on GitHub has it, re-run this script."
+        fi
     fi
 fi
 
@@ -1523,10 +1568,10 @@ if [ "$AI_READY" != true ]; then
     info "Skipped: ~/Developer/ai isn't here yet"
 elif [ "$AI_NEEDS_SYNC" != true ] && launchctl print "gui/$(id -u)/$AI_SYNC_LABEL" >/dev/null 2>&1 && [ ! -s "$HOME/Library/Logs/ai-sync.last" ]; then
     pass "~/Developer/ai syncs with GitHub hourly"
-elif [ "$AI_NEEDS_SYNC" != true ] && [ ! -x "$AI_DIR/scripts/install-sync.sh" ]; then
+elif [ "$AI_NEEDS_SYNC" != true ] && [ "$AI_SYNC_NOT_ON_GITHUB" = true ]; then
     # The AI repo step already listed it. Claude can't turn on a sync job
     # whose installer isn't in the repo, so it isn't started for this.
-    info "Skipped: ~/Developer/ai has no scripts/install-sync.sh yet"
+    info "Skipped: the ai repo has no scripts/install-sync.sh yet"
 else
     AI_SYNC_PENDING=true
     # ai_repo_pull already said how when the copy needs a merge.

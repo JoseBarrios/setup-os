@@ -24,7 +24,7 @@ Steps run in this order.
 
 | Step | What happens |
 |---|---|
-| Homebrew | Installs Homebrew (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) and adds it to `~/.zprofile`. Installs it only from an administrator account, and updates it only from the account that owns it. |
+| Homebrew | Installs Homebrew (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) and adds it to `~/.zprofile`. Installs it only from an administrator account, and runs `brew update` only from the account that owns it. |
 | Oh My Zsh | Installed before anything else writes to `~/.zshrc`, because its installer replaces that file. |
 | Claude Code | Installed early (native installer, `~/.local/bin/claude`, updates itself) so it can debug failures in the rest of the run. |
 | 1Password | Installs the app and CLI (`op`). If the CLI isn't signed in, the script pauses and asks you to sign in and turn on **Settings > Developer > Integrate with 1Password CLI** and **Use the SSH agent**. |
@@ -32,18 +32,18 @@ Steps run in this order.
 | Firewall | Turns on the application firewall and stealth mode. |
 | Lockdown Mode | Checks whether it's on. If not, it's turned on as the very last step (see below). |
 | Advanced Data Protection | If the Mac is signed in to iCloud, checks whether you've confirmed it's on. If not, it's guided at the end (see below). |
-| Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq shellcheck`, plus uv and the Hack Nerd Font. `jq` edits Claude Code's settings, `shellcheck` lints this script. Missing packages install in one go. `uv` runs Python MCP servers (`uvx`); Homebrew always installs the newest uv, usually only days old, so the script installs a pinned release at least 7 days old (`UV_VERSION`) from GitHub into `~/.local/bin`, checked by SHA-256. A uv that's already installed is left as is. The font cask only installs for Homebrew's owner, so other accounts get the same release from GitHub, checked by SHA-256. |
+| Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq shellcheck`, plus uv and the Hack Nerd Font. `jq` edits Claude Code's settings, `shellcheck` lints this script. Missing formulae install in one go. `uv` runs Python MCP servers (`uvx`); Homebrew always installs the newest uv, usually only days old, so the script installs a pinned release at least 7 days old (`UV_VERSION`) from GitHub into `~/.local/bin`, checked by SHA-256. To update it, set `UV_VERSION` and its SHA-256s to a newer release at least 7 days old and re-run: the copy in `~/.local/bin` is replaced. Any other uv, like Homebrew's, is left as is. The font cask only installs for Homebrew's owner, so other accounts get the same release from GitHub, checked by SHA-256. |
 | Claude apps | Installs the Claude desktop app and Google Chrome (skipped if already in `/Applications`; both update themselves). Checks Chrome for Claude in Chrome and, if it's missing, tells you where to get it. |
 | Keep awake | Desktop Macs only: turns system sleep off, starts the Mac again after a power cut, installs Amphetamine (administrator accounts only), and opens Claude and Amphetamine at login. See [Keep awake](#keep-awake). |
 | pyenv | Adds pyenv's init lines to `~/.zshrc`. |
-| Node | Installs nvm and the current Node.js LTS. nvm is the only Node manager. |
+| Node | Installs nvm and the newest Node.js LTS published at least 7 days ago (from nodejs.org's release list), and makes it nvm's default. nvm is the only Node manager, and its Node comes first on `PATH`, even when Homebrew's owner has installed `node`. |
 | GPG | Sets `pinentry-mac` for passphrase prompts. Kept for file encryption; Git signing uses SSH. |
 | SSH | Creates an Ed25519 key in 1Password (`SSH Key - <host>`). The private key never touches disk; the 1Password agent serves it through `~/.ssh/config`. |
 | Git | Sets your identity, editor and defaults, and signs commits and tags with the SSH key. See [Git Configuration](#git-configuration). |
 | GitHub | Logs in with `gh`, adds GitHub's host keys to `known_hosts` (fetched over HTTPS), and uploads the public key as both an authentication key and a signing key. |
 | Tests | Runs `ssh -T git@github.com` and makes a signed test commit, then verifies it. |
 | This repo over SSH | A new Mac clones this repo over HTTPS. Once SSH to GitHub works, its remote is switched to `git@github.com:JoseBarrios/setup-os.git` so you can push. |
-| AI repo | Clones `~/Developer/ai` over SSH, or brings the copy that's there up to date, then turns on its hourly GitHub sync. See [The AI repo](#the-ai-repo). |
+| AI repo | Clones `~/Developer/ai` over SSH, or brings the copy that's there up to date, runs its `scripts/setup.sh`, then turns on its hourly GitHub sync. See [The AI repo](#the-ai-repo). |
 | Claude Code config | Merges secret deny rules into `~/.claude/settings.json`, makes every session follow `~/Developer/ai/AGENTS.md`, and installs your skills as the `jose-skills` plugin. See [Claude Code](#claude-code). Also checks that Claude Code is logged in. |
 | Terminal | Imports Solarized Dark and sets it as the default profile, with Hack Nerd Font Mono 14pt. |
 | Finder | Shows hidden files. |
@@ -83,7 +83,7 @@ After a restart (a power cut or a macOS update), Claude is offline until you log
 The script also runs from a standard (non-administrator) account, such as a separate account for Claude on a Mac an administrator already set up. It doesn't ask for your password at the start. Instead:
 
 - Each step that needs an administrator (the firewall, `pmset`) opens a macOS window asking for an administrator's name and password, and only when the setting isn't already on. The command goes to `osascript` as an argument, so the password is typed into macOS, never into the script.
-- Homebrew belongs to the account that installed it. From any other account, missing packages and apps install as that account (`sudo -u <owner> -i brew install ...`) in one go, after an administrator approves in the same window. Homebrew's output appears when the install finishes. Homebrew is updated only from its owner's account.
+- Homebrew belongs to the account that installed it. From any other account, missing packages and apps install as that account (`sudo -u <owner> -i brew install ...`), after an administrator approves in the same window. Missing formulae install in one go; each missing app (1Password, its CLI, Claude, Chrome) asks separately. Homebrew's output appears when the install finishes. Only its owner's account runs `brew update`, though Homebrew may update itself, as its owner, before an install.
 - If Homebrew isn't installed, the summary asks you to install it from an administrator account.
 - FileVault is only checked. If it's off, the summary asks you to turn it on from an administrator account, since `fdesetup` asks for the password of the account it enables.
 - Amphetamine is listed under **Still needs you**, to install from the App Store.
@@ -111,7 +111,7 @@ If `~/Developer/ai` already exists, the script never overwrites your work:
 
 A branch that tracks nothing is set to track GitHub's; one that already tracks a branch is left as is.
 
-It also sets `core.hooksPath` to `scripts/hooks`, so the repo's secret scan runs before each commit (the check fails if the hook is missing or not executable), and runs the repo's `scripts/install-sync.sh`: a launchd job (`io.barrios.ai-sync`) that syncs with GitHub every hour. It fast-forwards when behind, pushes when ahead, never merges or force-pushes, and shows a notification when it needs you. If the repo has no `scripts/install-sync.sh` yet, **Still needs you** says so; re-run once the ai repo on GitHub has it. `private/` is gitignored, so a new Mac never gets it from GitHub; copy what you need from another Mac.
+It also runs the repo's `scripts/setup.sh`, which that repo asks for once per clone (re-running it is safe): it turns on the repo's git hooks, pins its commit identity to github@barrios.io, turns on object checks on fetch, links `op-sa` into `~/.local/bin` and creates `private/` with an empty blocklist. It sets `core.hooksPath` to `scripts/hooks` too, for a copy without `scripts/setup.sh`, so the repo's secret scan runs before each commit (the check fails if the hook is missing or not executable). Then it runs the repo's `scripts/install-sync.sh`: a launchd job (`io.barrios.ai-sync`) that syncs with GitHub every hour. It fast-forwards when behind, pushes when ahead, never merges or force-pushes, and shows a notification when it needs you. If neither this copy nor GitHub has `scripts/install-sync.sh` yet, **Still needs you** says so; re-run once the ai repo on GitHub has it. If only GitHub has it, the copy wasn't pulled, and the end of the run offers **Sync the ai repo**. `private/` is gitignored, so a new Mac never gets it from GitHub; copy what you need from another Mac.
 
 Near the end, the script checks that the sync job is loaded and hasn't flagged a problem (`~/Library/Logs/ai-sync.last` is empty). If it has, or the copy needs a merge, an interactive run ends (before Lockdown Mode, which restarts the Mac) by starting Claude Code in this repo with **Sync the ai repo**: Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything, and turns on the job, following [`CLAUDE.md`](../../CLAUDE.md). It isn't started just because `scripts/install-sync.sh` is missing, since Claude can't turn on a job that isn't in the repo.
 

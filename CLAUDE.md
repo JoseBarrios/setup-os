@@ -30,7 +30,7 @@ Jose has done steps 1 and 2 of `README.md`. You can't answer password, sudo or b
    - `git config --global user.email` is github@barrios.io, and `commit.gpgsign` is true
    - `git -C ~/Developer/setup-os remote get-url origin` and `git -C ~/Developer/ai remote get-url origin` start with `git@github.com:`
    - `git -C ~/Developer/ai fetch` works (its `origin` is the private GitHub repo `JoseBarrios/ai`), and `git -C ~/Developer/ai status -sb` then shows `main...origin/main` with nothing ahead or behind
-   - `launchctl print gui/$(id -u)/io.barrios.ai-sync` finds the ai repo's hourly GitHub sync (the script installs it with `~/Developer/ai/scripts/install-sync.sh`)
+   - `launchctl print gui/$(id -u)/io.barrios.ai-sync` finds the ai repo's hourly GitHub sync (the script installs it with `~/Developer/ai/scripts/install-sync.sh`). If the ai repo on GitHub has no `scripts/install-sync.sh`, report this check as skipped, not failed, and tell Jose
    - `~/.claude/CLAUDE.md` has the line `@~/Developer/ai/AGENTS.md`
    - `claude plugin list` shows `jose-skills@barrios-ai`
    - On a desktop Mac (`pmset -g batt` lists no `InternalBattery`): `pmset -g` shows `sleep 0` and `autorestart 1`, `/Applications/Amphetamine.app` exists, and `~/Library/LaunchAgents/local.setup-os.login-apps.plist` exists
