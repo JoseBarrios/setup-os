@@ -38,11 +38,11 @@ git clone https://github.com/JoseBarrios/setup-os.git ~/Developer/setup-os
 
 ### 3. Copy `~/Developer/ai` from another Mac
 
-It has no remote, so it moves as a git bundle. On a Mac that has it:
+It's a private GitHub repo (`JoseBarrios/ai`), but this Mac can't sign in to GitHub until the setup script runs, so copy it as a git bundle. On a Mac that has it:
 
 ```sh
 cd ~/Developer/ai
-git status        # commit anything pending first
+git status        # commit and push anything pending first
 git bundle create ~/Desktop/ai.bundle --all
 ```
 
@@ -50,11 +50,11 @@ AirDrop `ai.bundle` to the new Mac. If the Macs use different Apple IDs, set Air
 
 ```sh
 git clone ~/Downloads/ai.bundle ~/Developer/ai
-git -C ~/Developer/ai remote remove origin
+git -C ~/Developer/ai remote set-url origin git@github.com:JoseBarrios/ai.git
 rm ~/Downloads/ai.bundle
 ```
 
-Delete `ai.bundle` from the other Mac's Desktop too. `private/` isn't in the bundle on purpose, and the two copies don't sync on their own.
+Delete `ai.bundle` from the other Mac's Desktop too. `private/` isn't in the bundle on purpose. After the setup script, this copy syncs through GitHub like the others.
 
 ### 4. Start Claude Code
 

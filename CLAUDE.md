@@ -26,6 +26,7 @@ Jose has done steps 1 to 4 of `README.md`. You can't answer password, sudo or br
    - Check each of these and report pass or fail:
      - `claude doctor` and `gh auth status`
      - `ssh -T git@github.com` prints "successfully authenticated" (it exits 1 even then)
+     - `git -C ~/Developer/ai fetch` works (its `origin` is the private GitHub repo `JoseBarrios/ai`)
      - `fdesetup status` says FileVault is On
      - `git config --global user.email` is github@barrios.io, and `commit.gpgsign` is true
      - `claude plugin list` shows `jose-skills@barrios-ai`
