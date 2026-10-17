@@ -1,11 +1,16 @@
 #!/bin/bash
-# macOS setup script: installs dev tools, hardens security, and sets up Git,
-# SSH and GitHub with keys that live in 1Password (never on disk).
+# macOS setup script: installs dev tools and Claude (desktop app, Claude Code,
+# Chrome for Claude in Chrome), hardens security, and sets up Git, SSH and
+# GitHub with keys that live in 1Password (never on disk). Then it pulls
+# ~/Developer/ai from GitHub and configures Claude Code from it.
 # Idempotent: safe to run again. Every run ends with a pass/fail summary and a
 # list of anything that still needs you.
 # When a command fails and Claude Code is installed, Claude is asked to debug it.
 #
 # Written for the bash 3.2 that ships with macOS (/bin/bash).
+
+# A "~" in a message is text for you to read, not a path to expand.
+# shellcheck disable=SC2088
 
 # Treat unset variables as errors (-u) and make pipelines fail if any part fails.
 # No -e (errexit): failures go to the ERR trap below, which logs them and keeps going.
@@ -40,7 +45,36 @@ TERMINAL_PROFILE="Solarized Dark xterm-256color"
 TERMINAL_FONT="HackNFM-Regular"
 TERMINAL_FONT_SIZE=14
 
-BREW_FORMULAE=(cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep)
+# jq edits Claude Code's settings.json, uv runs Python MCP servers (uvx), and
+# this script is linted with shellcheck.
+BREW_FORMULAE=(cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq uv shellcheck)
+
+# ~/Developer/ai: skills, shared instructions (AGENTS.md) and scheduled task
+# prompts for every AI tool. It's private on GitHub, so it's cloned over SSH
+# once the SSH key is on GitHub. Override with: AI_REPO=<owner/name> ./osx.sh
+AI_DIR="$HOME/Developer/ai"
+AI_REPO="${AI_REPO:-JoseBarrios/ai}"
+AI_REPO_URL="git@github.com:${AI_REPO}.git"
+
+# This repo. It's first cloned over HTTPS, before any SSH key exists; once SSH
+# works its remote is switched to SSH so you can push.
+SETUP_OS_REPO="JoseBarrios/setup-os"
+
+# Claude Code reads ~/.claude/CLAUDE.md in every session; this line makes it
+# follow AGENTS.md. The skills in ~/Developer/ai install as a plugin from the
+# marketplace defined in that repo.
+CLAUDE_HOME="$HOME/.claude"
+CLAUDE_IMPORT_LINE="@~/Developer/ai/AGENTS.md"
+CLAUDE_MARKETPLACE="barrios-ai"
+CLAUDE_PLUGIN="jose-skills@barrios-ai"
+
+# Merged into ~/.claude/settings.json: stop Claude's file tools from reading
+# where secrets can still end up on disk.
+CLAUDE_SETTINGS_SCHEMA="https://json.schemastore.org/claude-code-settings.json"
+CLAUDE_DENY_RULES='["Read(~/.ssh/**)","Read(~/.gnupg/**)","Read(~/.filevault/**)","Read(//**/.env)","Read(//**/.env.*)"]'
+
+# Claude in Chrome's Chrome Web Store ID.
+CLAUDE_CHROME_EXT_ID="fcoeoabgfenejglbffodgkkbkcdhcgfn"
 
 # FileVault personal recovery keys look like XXXX-XXXX-XXXX-XXXX-XXXX-XXXX.
 FV_KEY_REGEX='^[A-Z0-9]{4}(-[A-Z0-9]{4}){5}$'
@@ -152,6 +186,11 @@ function verify_defaults {
 function append_line {
     touch "$2"
     if ! grep -qxF -- "$1" "$2"; then
+        # If the file doesn't end in a newline, add one so the new line
+        # isn't glued onto the last one.
+        if [ -s "$2" ] && [ -n "$(tail -c 1 "$2")" ]; then
+            printf '\n' >> "$2"
+        fi
         printf '%s\n' "$1" >> "$2"
     fi
 }
@@ -206,6 +245,94 @@ function add_github_key {
 
 function terminal_has_profile {
     [ "$(osascript -e "tell application \"Terminal\" to exists settings set \"$TERMINAL_PROFILE\"" 2>/dev/null)" = "true" ]
+}
+
+# Print a git remote URL without any user or token in it.
+# Usage: redact_url <url>
+function redact_url {
+    printf '%s' "$1" | sed -E 's#://[^/@]*@#://***@#'
+}
+
+# Bring an existing ~/Developer/ai up to date with GitHub without losing work:
+# it only fast-forwards, and only with no uncommitted changes. Anything else
+# (local commits, both sides changed, unrelated history) is left as is and
+# reported for you to sort out.
+function ai_repo_pull {
+    local origin branch upstream ahead behind in_way
+    origin="$(git -C "$AI_DIR" config --get remote.origin.url 2>/dev/null || true)"
+    case "$origin" in
+        "")
+            # Copied from another Mac (git bundle) or cut off from GitHub.
+            if git -C "$AI_DIR" remote add origin "$AI_REPO_URL"; then
+                info "~/Developer/ai had no remote; added $AI_REPO_URL"
+            else
+                fail "Could not add a remote to ~/Developer/ai"
+                return 0
+            fi
+            ;;
+        "https://github.com/$AI_REPO"|"https://github.com/$AI_REPO.git"|https://*@github.com/"$AI_REPO"|https://*@github.com/"$AI_REPO.git")
+            # HTTPS needs a token (and may have one stored in the URL); SSH
+            # uses the 1Password key.
+            if git -C "$AI_DIR" remote set-url origin "$AI_REPO_URL"; then
+                info "Switched ~/Developer/ai to SSH ($AI_REPO_URL)"
+            fi
+            ;;
+    esac
+
+    if ! git -C "$AI_DIR" fetch -q --prune origin; then
+        fail "Could not fetch ~/Developer/ai from $(redact_url "$(git -C "$AI_DIR" config --get remote.origin.url 2>/dev/null)")"
+        return 0
+    fi
+
+    branch="$(git -C "$AI_DIR" symbolic-ref --short -q HEAD || true)"
+    if [ -z "$branch" ]; then
+        manual "~/Developer/ai is not on a branch. Check out main, then re-run to pull it."
+        return 0
+    fi
+    upstream="origin/$branch"
+    if ! git -C "$AI_DIR" rev-parse -q --verify "refs/remotes/$upstream" >/dev/null; then
+        manual "GitHub has no '$branch' branch of the AI repo. Push it (git -C ~/Developer/ai push -u origin $branch) or check out main, then re-run."
+        return 0
+    fi
+    if ! git -C "$AI_DIR" merge-base HEAD "$upstream" >/dev/null 2>&1; then
+        AI_NEEDS_SYNC=true
+        manual "~/Developer/ai was not pulled: it shares no history with GitHub (this copy was re-created, not cloned). Its files and commits were left as is. To merge the two without losing either side, run claude in ~/Developer/setup-os and type: Sync the ai repo"
+        return 0
+    fi
+
+    # Track GitHub so a plain `git pull` works from now on, unless the branch
+    # already tracks something.
+    if [ -z "$(git -C "$AI_DIR" config --get "branch.$branch.merge" 2>/dev/null)" ]; then
+        git -C "$AI_DIR" branch -q --set-upstream-to="$upstream" "$branch" >/dev/null 2>&1 || true
+    fi
+
+    # Left count: commits only here. Right count: commits only on GitHub.
+    read -r ahead behind <<< "$(git -C "$AI_DIR" rev-list --left-right --count "HEAD...$upstream" 2>/dev/null || echo "0 0")"
+    if [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; then
+        AI_NEEDS_SYNC=true
+        manual "~/Developer/ai and GitHub have both changed ($ahead commit(s) here, $behind on GitHub). To merge them, run claude in ~/Developer/setup-os and type: Sync the ai repo"
+    elif [ "$behind" -gt 0 ]; then
+        # Files GitHub adds that already exist here, untracked or ignored
+        # (e.g. in private/). Git would overwrite ignored ones without asking.
+        in_way="$(git -C "$AI_DIR" diff --name-only -z --diff-filter=A HEAD "$upstream" 2>/dev/null \
+            | while IFS= read -r -d '' f; do
+                  if [ -e "$AI_DIR/$f" ] || [ -L "$AI_DIR/$f" ]; then printf '%s ' "$f"; fi
+              done || true)"
+        if [ -n "$(git -C "$AI_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+            manual "~/Developer/ai has uncommitted changes and is $behind commit(s) behind GitHub. Commit them (with a CHANGELOG.md entry), then re-run to pull."
+        elif [ -n "$in_way" ]; then
+            manual "~/Developer/ai was not pulled: GitHub adds files that already exist here and would replace them: ${in_way% }. Move them aside, then re-run."
+        elif git -C "$AI_DIR" merge -q --ff-only "$upstream"; then
+            pass "Pulled $behind new commit(s) into ~/Developer/ai"
+        else
+            fail "Could not fast-forward ~/Developer/ai to GitHub"
+        fi
+    else
+        pass "~/Developer/ai has everything on GitHub"
+        if [ "$ahead" -gt 0 ]; then
+            manual "~/Developer/ai has $ahead commit(s) that aren't on GitHub. Push them: git -C ~/Developer/ai push"
+        fi
+    fi
 }
 
 ###############################
@@ -510,6 +637,9 @@ verify_cmd pinentry-mac
 verify_cmd pyenv
 verify_cmd yamllint
 verify_cmd rg
+verify_cmd jq
+verify_cmd uv
+verify_cmd shellcheck
 
 echo "==> Installing fonts..."
 # Hack Nerd Font gives Terminal and Vim their powerline symbols and icons.
@@ -519,6 +649,41 @@ if ! brew_safe list --cask font-hack-nerd-font &>/dev/null && \
     brew_safe install --cask font-hack-nerd-font
 else
     echo "  Hack Nerd Font already installed"
+fi
+
+###########################
+#   CLAUDE APPS           #
+###########################
+# Claude Code was installed at the start. This adds the desktop app and Google
+# Chrome, the browser Claude in Chrome is built for. Both update themselves.
+echo "==> Installing the Claude desktop app and Google Chrome..."
+
+# The casks fail if the app was installed outside Homebrew (e.g. downloaded),
+# so check for the app on disk first.
+CLAUDE_APP_NEW=false
+if [ ! -d "/Applications/Claude.app" ]; then
+    brew_safe install --cask claude
+    CLAUDE_APP_NEW=true
+else
+    echo "  Claude.app already installed"
+fi
+verify_dir "/Applications/Claude.app"
+if [ "$CLAUDE_APP_NEW" = true ] && [ -d "/Applications/Claude.app" ]; then
+    manual "Open the Claude app and sign in."
+fi
+
+if [ ! -d "/Applications/Google Chrome.app" ]; then
+    brew_safe install --cask google-chrome
+else
+    echo "  Google Chrome already installed"
+fi
+verify_dir "/Applications/Google Chrome.app"
+
+# Chrome keeps each installed extension in <profile>/Extensions/<id>.
+if ls -d "$HOME/Library/Application Support/Google/Chrome/"*/Extensions/"$CLAUDE_CHROME_EXT_ID" &>/dev/null; then
+    pass "Claude in Chrome is installed"
+else
+    manual "Install Claude in Chrome: open https://chromewebstore.google.com/detail/claude/$CLAUDE_CHROME_EXT_ID in Chrome, click Add to Chrome, sign in with your Claude account and pin it. Then in the Claude app: Settings > Connectors > Claude in Chrome > Configure, and turn it on."
 fi
 
 ###########################
@@ -727,6 +892,7 @@ fi
 echo "==> Connecting GitHub..."
 
 GH_READY=false
+SSH_OK=false
 if gh auth status -h github.com &>/dev/null; then
     GH_READY=true
 elif is_interactive; then
@@ -768,7 +934,7 @@ if [ "$GH_READY" = true ]; then
             # ssh -T exits 1 even on success, so check its message instead.
             SSH_TEST="$(ssh -T -o ConnectTimeout=10 git@github.com 2>&1 || true)"
             case "$SSH_TEST" in
-                *"successfully authenticated"*) pass "SSH to GitHub works" ;;
+                *"successfully authenticated"*) SSH_OK=true; pass "SSH to GitHub works" ;;
                 *) fail "SSH to GitHub failed: $SSH_TEST" ;;
             esac
 
@@ -787,6 +953,196 @@ if [ "$GH_READY" = true ]; then
     fi
 else
     manual "Run 'gh auth login', then re-run to add your SSH key to GitHub."
+fi
+
+# The test above only runs when gh and 1Password are both ready. If SSH to
+# GitHub works anyway (say, the key is already on GitHub), use it below.
+if [ "$SSH_OK" != true ] && ssh-keygen -F github.com &>/dev/null; then
+    case "$(ssh -T -o ConnectTimeout=10 -o BatchMode=yes git@github.com 2>&1 || true)" in
+        *"successfully authenticated"*) SSH_OK=true ;;
+    esac
+fi
+
+###########################
+#   THIS REPO OVER SSH    #
+###########################
+# This repo is cloned over HTTPS on a new Mac, before any SSH key exists.
+# Switch it to SSH once that works, so you can push from this Mac.
+echo "==> Checking this repo's GitHub remote..."
+
+SETUP_OS_ORIGIN="$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || true)"
+case "$SETUP_OS_ORIGIN" in
+    "https://github.com/$SETUP_OS_REPO"|"https://github.com/$SETUP_OS_REPO.git"|https://*@github.com/"$SETUP_OS_REPO"|https://*@github.com/"$SETUP_OS_REPO.git")
+        if [ "$SSH_OK" != true ]; then
+            manual "Re-run once SSH to GitHub works: it switches this repo's remote to SSH."
+        elif git -C "$REPO_ROOT" remote set-url origin "git@github.com:$SETUP_OS_REPO.git"; then
+            pass "setup-os now uses SSH (git@github.com:$SETUP_OS_REPO.git)"
+        else
+            fail "Could not switch setup-os to SSH"
+        fi
+        ;;
+    "git@github.com:$SETUP_OS_REPO.git")
+        pass "setup-os uses SSH"
+        ;;
+    *)
+        info "setup-os remote is '$(redact_url "${SETUP_OS_ORIGIN:-none}")', left as is"
+        ;;
+esac
+
+###########################
+#   AI REPO               #
+###########################
+# Clone ~/Developer/ai, or fast-forward the copy that's here. Never overwrites
+# local work (see ai_repo_pull).
+echo "==> Getting the AI repo (~/Developer/ai) from GitHub..."
+
+AI_READY=false
+# Set by ai_repo_pull when this copy and GitHub need a merge.
+AI_NEEDS_SYNC=false
+if [ -d "$AI_DIR" ] && [ ! -d "$AI_DIR/.git" ] && [ -z "$(ls -A "$AI_DIR" 2>/dev/null)" ]; then
+    # An empty folder: git clones into it.
+    rmdir "$AI_DIR" 2>/dev/null || true
+fi
+if [ -e "$AI_DIR" ] && [ ! -d "$AI_DIR/.git" ]; then
+    fail "$AI_DIR exists but is not a git repo"
+    manual "Move $AI_DIR aside, then re-run to clone the AI repo there."
+elif [ -d "$AI_DIR/.git" ]; then
+    # Usable even if the pull below can't happen.
+    AI_READY=true
+    if [ "$SSH_OK" = true ]; then
+        ai_repo_pull
+    else
+        manual "~/Developer/ai was not pulled: SSH to GitHub doesn't work yet. Re-run once it does."
+    fi
+elif [ "$SSH_OK" = true ]; then
+    mkdir -p "$(dirname "$AI_DIR")"
+    if git clone -q "$AI_REPO_URL" "$AI_DIR"; then
+        pass "Cloned $AI_REPO into ~/Developer/ai"
+        AI_READY=true
+    else
+        fail "Could not clone $AI_REPO_URL into ~/Developer/ai"
+    fi
+else
+    manual "~/Developer/ai was not cloned: SSH to GitHub doesn't work yet. Re-run once it does."
+fi
+
+if [ "$AI_READY" = true ]; then
+    # Its pre-commit hook scans every commit for secrets.
+    git -C "$AI_DIR" config core.hooksPath scripts/hooks
+    if [ "$(git -C "$AI_DIR" config --get core.hooksPath 2>/dev/null || true)" != "scripts/hooks" ]; then
+        fail "core.hooksPath is not set in ~/Developer/ai"
+    elif [ ! -x "$AI_DIR/scripts/hooks/pre-commit" ]; then
+        fail "~/Developer/ai/scripts/hooks/pre-commit is missing or not executable, so commits aren't scanned for secrets"
+    else
+        pass "~/Developer/ai scans each commit for secrets (pre-commit hook)"
+    fi
+    # private/ is gitignored, so it never comes from GitHub.
+    if [ ! -d "$AI_DIR/private" ]; then
+        info "~/Developer/ai/private/ isn't in git. Copy anything you need from it from another Mac."
+    fi
+    # The repo's own hourly GitHub sync (a launchd job): it fast-forwards when
+    # behind, pushes when ahead, and never merges or force-pushes. Re-running
+    # its installer just reloads it.
+    if [ -x "$AI_DIR/scripts/install-sync.sh" ]; then
+        if "$AI_DIR/scripts/install-sync.sh"; then
+            pass "Turned on the hourly ~/Developer/ai sync with GitHub"
+        else
+            fail "Could not turn on the hourly ~/Developer/ai sync (scripts/install-sync.sh)"
+        fi
+    fi
+fi
+
+###########################
+#   CLAUDE CODE CONFIG    #
+###########################
+# User-level config, so it applies in every folder. Claude Code edits
+# settings.json itself (plugins, /config), so it's merged, never overwritten.
+echo "==> Configuring Claude Code..."
+
+mkdir -p "$CLAUDE_HOME"
+CLAUDE_SETTINGS="$CLAUDE_HOME/settings.json"
+
+if ! command -v jq &>/dev/null; then
+    fail "jq is not installed, so ~/.claude/settings.json was not set up"
+else
+    CLAUDE_SETTINGS_EXISTED=true
+    # Missing, empty or whitespace only: start from an empty object.
+    if [ ! -s "$CLAUDE_SETTINGS" ] || ! grep -q '[^[:space:]]' "$CLAUDE_SETTINGS"; then
+        printf '{}\n' > "$CLAUDE_SETTINGS"
+        CLAUDE_SETTINGS_EXISTED=false
+    fi
+    if ! jq -e 'type == "object"' "$CLAUDE_SETTINGS" &>/dev/null; then
+        fail "~/.claude/settings.json is not a JSON object, so it was left as is"
+    else
+        # Keep every existing key; add $schema if missing and any deny rule
+        # that isn't there yet. An existing file is backed up first, and only
+        # when something changes.
+        CLAUDE_SETTINGS_TMP="$(mktemp)"
+        if jq --arg schema "$CLAUDE_SETTINGS_SCHEMA" --argjson deny "$CLAUDE_DENY_RULES" '
+                (if has("$schema") then . else {"$schema": $schema} + . end)
+                | .permissions = (.permissions // {})
+                | .permissions.deny = reduce $deny[] as $rule ((.permissions.deny // []);
+                      if index([$rule]) then . else . + [$rule] end)
+            ' "$CLAUDE_SETTINGS" > "$CLAUDE_SETTINGS_TMP"; then
+            if ! cmp -s "$CLAUDE_SETTINGS_TMP" "$CLAUDE_SETTINGS"; then
+                if [ "$CLAUDE_SETTINGS_EXISTED" = true ]; then
+                    cp -p "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
+                fi
+                # cat keeps the file's owner and permissions.
+                cat "$CLAUDE_SETTINGS_TMP" > "$CLAUDE_SETTINGS"
+            fi
+        else
+            fail "Could not update ~/.claude/settings.json"
+        fi
+        rm -f "$CLAUDE_SETTINGS_TMP"
+        if jq -e --argjson deny "$CLAUDE_DENY_RULES" \
+               '(.permissions.deny // []) as $have | all($deny[]; . as $rule | $have | index([$rule]) != null)' \
+               "$CLAUDE_SETTINGS" &>/dev/null; then
+            pass "Claude Code can't read SSH or GPG keys, the FileVault fallback or .env files"
+        else
+            fail "~/.claude/settings.json is missing some deny rules"
+        fi
+    fi
+fi
+
+if [ "$AI_READY" != true ] || [ ! -f "$AI_DIR/AGENTS.md" ]; then
+    manual "Re-run once ~/Developer/ai is here: it makes Claude Code follow its AGENTS.md and installs your skills."
+else
+    # Every session follows the shared rules in ~/Developer/ai/AGENTS.md.
+    append_line "$CLAUDE_IMPORT_LINE" "$CLAUDE_HOME/CLAUDE.md"
+    verify_line_in_file "$CLAUDE_IMPORT_LINE" "$CLAUDE_HOME/CLAUDE.md"
+
+    # Your skills, as the jose-skills plugin. The marketplace is read in place
+    # from ~/Developer/ai, so skills you pull or edit load in the next session.
+    if command -v claude &>/dev/null && command -v jq &>/dev/null && [ -f "$AI_DIR/.claude-plugin/marketplace.json" ]; then
+        CLAUDE_MKT_SOURCE="$(claude plugin marketplace list --json 2>/dev/null \
+            | jq -r --arg n "$CLAUDE_MARKETPLACE" '.[] | select(.name == $n) | (.path // .repo // .url // .installLocation // "unknown")' 2>/dev/null \
+            | head -n 1 || true)"
+        if [ -z "$CLAUDE_MKT_SOURCE" ]; then
+            claude plugin marketplace add "$AI_DIR" --scope user
+        elif [ "$CLAUDE_MKT_SOURCE" != "$AI_DIR" ]; then
+            info "The $CLAUDE_MARKETPLACE marketplace comes from $CLAUDE_MKT_SOURCE, not ~/Developer/ai (left as is)"
+        fi
+        # The list also shows project-scope installs from other folders, so
+        # only a user-scope install counts.
+        if ! claude plugin list --json 2>/dev/null | jq -e --arg id "$CLAUDE_PLUGIN" 'any(.[]; .id == $id and (.scope // "user") == "user")' &>/dev/null; then
+            claude plugin install "$CLAUDE_PLUGIN" --scope user
+        fi
+        if claude plugin list --json 2>/dev/null | jq -e --arg id "$CLAUDE_PLUGIN" 'any(.[]; .id == $id and (.scope // "user") == "user" and .enabled != false)' &>/dev/null; then
+            pass "Claude Code has your skills ($CLAUDE_PLUGIN)"
+        else
+            fail "$CLAUDE_PLUGIN is not installed and enabled in Claude Code (check 'claude plugin list'; 'claude update' if it's old)"
+        fi
+    else
+        fail "Could not install $CLAUDE_PLUGIN (needs claude, jq and ~/Developer/ai/.claude-plugin/marketplace.json)"
+    fi
+fi
+
+# Exit status 0 means logged in.
+if command -v claude &>/dev/null && claude auth status &>/dev/null; then
+    pass "Claude Code is logged in"
+else
+    manual "Log in to Claude Code: run 'claude' and follow the prompts."
 fi
 
 ###########################
@@ -849,11 +1205,11 @@ verify_defaults com.apple.finder AppleShowAllFiles "1"
 #   VIM                   #
 ###########################
 echo "==> Running Vim setup..."
-/bin/bash "$REPO_ROOT/app/vim/vim-setup.sh"
-
-# coc.nvim (VS Code style completion) needs its Node dependencies.
-if [ -d "$SETUP_HOME/vim/bundle/coc.nvim" ]; then
-    (cd "$SETUP_HOME/vim/bundle/coc.nvim" && npm install)
+# It installs the plugins, builds coc.nvim with npm, and has its own checks.
+if /bin/bash "$REPO_ROOT/app/vim/vim-setup.sh"; then
+    pass "Vim setup passed its checks"
+else
+    fail "Vim setup had failures (see its summary above)"
 fi
 
 ###############################
@@ -865,16 +1221,19 @@ fi
 # interactively at the end of the run ("Sync the ai repo" in CLAUDE.md).
 # Here we only check whether that's needed.
 echo "==> Checking the ai repo's GitHub sync..."
-AI_REPO="$HOME/Developer/ai"
 AI_SYNC_LABEL="io.barrios.ai-sync"
 AI_SYNC_PENDING=false
-if [ ! -d "$AI_REPO/.git" ]; then
-    manual "Copy ~/Developer/ai to this Mac (README.md step 3), then re-run."
-elif launchctl print "gui/$(id -u)/$AI_SYNC_LABEL" >/dev/null 2>&1 && [ ! -s "$HOME/Library/Logs/ai-sync.last" ]; then
+if [ "$AI_READY" != true ]; then
+    # Not on this Mac yet; the AI repo step above says what to do.
+    info "Skipped: ~/Developer/ai isn't here yet"
+elif [ "$AI_NEEDS_SYNC" != true ] && launchctl print "gui/$(id -u)/$AI_SYNC_LABEL" >/dev/null 2>&1 && [ ! -s "$HOME/Library/Logs/ai-sync.last" ]; then
     pass "~/Developer/ai syncs with GitHub hourly"
 else
     AI_SYNC_PENDING=true
-    manual "Sync ~/Developer/ai with GitHub: re-run this script, or in Claude Code from ~/Developer/setup-os type: Sync the ai repo"
+    # ai_repo_pull already said how when the copy needs a merge.
+    if [ "$AI_NEEDS_SYNC" != true ]; then
+        manual "Sync ~/Developer/ai with GitHub: re-run this script, or in Claude Code from ~/Developer/setup-os type: Sync the ai repo"
+    fi
 fi
 
 ###########################

@@ -8,30 +8,26 @@ Setup scripts for Jose's machines. Mac: `os/mac/osx.sh`, documented in `os/mac/R
 - Never use em dashes. Be succinct and direct.
 - `osx.sh` must stay idempotent and run under macOS's `/bin/bash` 3.2. Update `os/mac/README.md` with any change to it.
 - Secrets live only in 1Password: never on disk, in command-line arguments or in output.
+- `~/Developer/ai` has its own rules (its `AGENTS.md`); every change there needs a `CHANGELOG.md` entry. Change it only when following "Sync the ai repo" below. Never force-push, rewrite or delete its history, or run `git reset --hard` there. Tell Jose if something there looks wrong.
 
 ## When Jose says "Set up this Mac"
 
-Jose has done steps 1 to 4 of `README.md`. You can't answer password, sudo or browser prompts, so never run `osx.sh` or `sudo` yourself. Jose runs them in a second Terminal tab.
+Jose has done steps 1 and 2 of `README.md`. You can't answer password, sudo or browser prompts, so never run `osx.sh` or `sudo` yourself. Jose runs them in a second Terminal tab.
 
-1. **Check the basics:** `claude --version`, `xcode-select -p`, `git --version`, and that `~/Developer/ai` is a git repo. If something is missing, point Jose to the `README.md` step that covers it.
-2. **Set up `~/Developer/ai`.** It doesn't depend on the script. Follow its `README.md` and `vendors/claude/README.md`:
-   - `git -C ~/Developer/ai config core.hooksPath scripts/hooks`
-   - `claude plugin marketplace add ~/Developer/ai`, then `claude plugin install jose-skills@barrios-ai`
-   - Make sure `~/.claude/CLAUDE.md` has the line `@~/Developer/ai/AGENTS.md`. Add it if missing and keep everything else in the file.
-   - Skip `mcp/`: local MCP servers run on the hub Mac only. If Jose says this Mac is the new hub, stop and ask.
-   - Don't edit files inside `~/Developer/ai`; its changes must be logged in its `CHANGELOG.md`. Tell Jose if something there looks wrong.
-3. **Run the setup script.** Read `os/mac/README.md` and `os/mac/osx.sh`. Ask Jose to run `~/Developer/setup-os/os/mac/osx.sh` in the second tab, to turn on Advanced Data Protection at its prompt, to press Enter at the ai repo sync prompt (it starts a second Claude Code session in that tab that runs "Sync the ai repo"), and to type `s` at the Lockdown Mode prompt for now, since turning it on restarts the Mac. Explain prompts when asked. When something fails, read the output Jose pastes and fix the cause. If it's a bug in `osx.sh`, fix the script, check it with `bash -n` (and `shellcheck` if installed), and have Jose re-run it.
-4. **Finish.** Once the script's summary shows no failures:
-   - Switch this repo to SSH: `git -C ~/Developer/setup-os remote set-url origin git@github.com:JoseBarrios/setup-os.git`
-   - Check each of these and report pass or fail:
-     - `claude doctor` and `gh auth status`
-     - `ssh -T git@github.com` prints "successfully authenticated" (it exits 1 even then)
-     - `git -C ~/Developer/ai fetch` works (its `origin` is the private GitHub repo `JoseBarrios/ai`)
-     - `launchctl print gui/$(id -u)/io.barrios.ai-sync` succeeds (the ai repo's hourly sync)
-     - `fdesetup status` says FileVault is On
-     - `git config --global user.email` is github@barrios.io, and `commit.gpgsign` is true
-     - `claude plugin list` shows `jose-skills@barrios-ai`
-5. **Hand off.** List what's left, including the script's "Still needs you" items. Last, Jose re-runs the script and presses Enter at the Lockdown Mode step. After the restart he runs it once more to confirm everything passes.
+1. **Check the basics:** `claude --version`, `xcode-select -p` and `git --version`. If something is missing, point Jose to the `README.md` step that covers it.
+2. **Run the setup script.** Read `os/mac/README.md` and `os/mac/osx.sh`. Ask Jose to run `~/Developer/setup-os/os/mac/osx.sh` in the second tab, to turn on Advanced Data Protection at its prompt, to press Enter at the ai repo sync prompt if it shows one (it starts a second Claude Code session in that tab that runs "Sync the ai repo"), and to type `s` at the Lockdown Mode prompt for now, since turning it on restarts the Mac. Explain prompts when asked. When something fails, read the output Jose pastes and fix the cause. If it's a bug in `osx.sh`, fix the script, check it with `bash -n` and `shellcheck`, and have Jose re-run it.
+3. **The AI repo.** The script clones `~/Developer/ai` or fast-forwards it, and never overwrites local work. If it reports uncommitted changes, local commits, both sides changed or unrelated history there, show Jose what differs (`git -C ~/Developer/ai status -sb`, `git -C ~/Developer/ai log --oneline HEAD...origin/main`) and, once he agrees, follow "Sync the ai repo" below. Skip `mcp/`: local MCP servers run on the hub Mac only. If Jose says this Mac is the new hub, stop and ask.
+4. **Finish.** Once the script's summary shows no failures, check each of these and report pass or fail:
+   - `claude doctor`, `claude auth status` and `gh auth status`
+   - `ssh -T git@github.com` prints "successfully authenticated" (it exits 1 even then)
+   - `fdesetup status` says FileVault is On
+   - `git config --global user.email` is github@barrios.io, and `commit.gpgsign` is true
+   - `git -C ~/Developer/setup-os remote get-url origin` and `git -C ~/Developer/ai remote get-url origin` start with `git@github.com:`
+   - `git -C ~/Developer/ai fetch` works (its `origin` is the private GitHub repo `JoseBarrios/ai`), and `git -C ~/Developer/ai status -sb` then shows `main...origin/main` with nothing ahead or behind
+   - `launchctl print gui/$(id -u)/io.barrios.ai-sync` finds the ai repo's hourly GitHub sync (the script installs it with `~/Developer/ai/scripts/install-sync.sh`)
+   - `~/.claude/CLAUDE.md` has the line `@~/Developer/ai/AGENTS.md`
+   - `claude plugin list` shows `jose-skills@barrios-ai`
+5. **Hand off.** List what's left, including the script's "Still needs you" items (signing in to the Claude app and adding Claude in Chrome, if listed). Last, Jose re-runs the script and presses Enter at the Lockdown Mode step. After the restart he runs it once more to confirm everything passes.
 
 ## When Jose says "Sync the ai repo"
 

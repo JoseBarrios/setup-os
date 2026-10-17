@@ -2,7 +2,7 @@
 
 > **New Mac?** Start with [New Mac: start here](../../README.md#new-mac-start-here). It gets Claude Code running first so Claude can help with this script.
 
-Sets up a Mac for development: security settings, Homebrew and dev tools, a Vim-centred editor setup, and Git, SSH and GitHub with keys that live in 1Password. It is **idempotent**: re-run it any time, and it only changes what is missing.
+Sets up a Mac for development and for Claude: security settings, Homebrew and dev tools, the Claude desktop app, Claude Code and Chrome, a Vim-centred editor setup, and Git, SSH and GitHub with keys that live in 1Password. Then it pulls `~/Developer/ai` from GitHub and configures Claude Code from it. It is **idempotent**: re-run it any time, and it only changes what is missing.
 
 ## Quick Start
 
@@ -12,7 +12,10 @@ Sets up a Mac for development: security settings, Homebrew and dev tools, a Vim-
 
 Run it as your normal user (not with `sudo`); it asks for your password once. The first run stops so you can sign in to 1Password. Each run ends with a pass/fail summary and a **Still needs you** list.
 
-Optional: `OP_VAULT=<name> ./os/mac/osx.sh` picks the 1Password vault. By default it uses `Personal`, `Private` or `Employee`, whichever exists.
+Optional overrides:
+
+- `OP_VAULT=<name>` picks the 1Password vault. By default it uses `Personal`, `Private` or `Employee`, whichever exists.
+- `AI_REPO=<owner/name>` picks the GitHub repo cloned into `~/Developer/ai`. Default: `JoseBarrios/ai`.
 
 ## What It Does
 
@@ -22,24 +25,28 @@ Steps run in this order.
 |---|---|
 | Homebrew | Installs Homebrew (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) and adds it to `~/.zprofile`. |
 | Oh My Zsh | Installed before anything else writes to `~/.zshrc`, because its installer replaces that file. |
-| Claude Code | Installed early so it can debug failures in the rest of the run. |
+| Claude Code | Installed early (native installer, `~/.local/bin/claude`, updates itself) so it can debug failures in the rest of the run. |
 | 1Password | Installs the app and CLI (`op`). If the CLI isn't signed in, the script pauses and asks you to sign in and turn on **Settings > Developer > Integrate with 1Password CLI** and **Use the SSH agent**. |
 | Disk encryption | Turns on FileVault full-disk encryption and reports progress while the disk encrypts. The recovery key goes straight into 1Password as `FileVault Recovery Key - <host>` and is never written to disk. If 1Password isn't ready, it is kept in `~/.filevault/recovery_key.plist` (owner-only) and moved into 1Password on the next run. |
 | Firewall | Turns on the application firewall and stealth mode. |
 | Lockdown Mode | Checks whether it's on. If not, it's turned on as the very last step (see below). |
 | Advanced Data Protection | If the Mac is signed in to iCloud, checks whether you've confirmed it's on. If not, it's guided at the end (see below). |
-| Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep`, plus the Hack Nerd Font. |
+| Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq uv shellcheck`, plus the Hack Nerd Font. `jq` edits Claude Code's settings, `uv` runs Python MCP servers (`uvx`), `shellcheck` lints this script. |
+| Claude apps | Installs the Claude desktop app and Google Chrome (skipped if already in `/Applications`; both update themselves). Checks Chrome for Claude in Chrome and, if it's missing, tells you where to get it. |
 | pyenv | Adds pyenv's init lines to `~/.zshrc`. |
 | Node | Installs nvm and the current Node.js LTS. nvm is the only Node manager. |
 | GPG | Sets `pinentry-mac` for passphrase prompts. Kept for file encryption; Git signing uses SSH. |
 | SSH | Creates an Ed25519 key in 1Password (`SSH Key - <host>`). The private key never touches disk; the 1Password agent serves it through `~/.ssh/config`. |
-| Git | Sets your identity, editor and defaults, and signs commits and tags with the SSH key. |
+| Git | Sets your identity, editor and defaults, and signs commits and tags with the SSH key. See [Git Configuration](#git-configuration). |
 | GitHub | Logs in with `gh`, adds GitHub's host keys to `known_hosts` (fetched over HTTPS), and uploads the public key as both an authentication key and a signing key. |
 | Tests | Runs `ssh -T git@github.com` and makes a signed test commit, then verifies it. |
+| This repo over SSH | A new Mac clones this repo over HTTPS. Once SSH to GitHub works, its remote is switched to `git@github.com:JoseBarrios/setup-os.git` so you can push. |
+| AI repo | Clones `~/Developer/ai` over SSH, or brings the copy that's there up to date, then turns on its hourly GitHub sync. See [The AI repo](#the-ai-repo). |
+| Claude Code config | Merges secret deny rules into `~/.claude/settings.json`, makes every session follow `~/Developer/ai/AGENTS.md`, and installs your skills as the `jose-skills` plugin. See [Claude Code](#claude-code). Also checks that Claude Code is logged in. |
 | Terminal | Imports Solarized Dark and sets it as the default profile, with Hack Nerd Font Mono 14pt. |
 | Finder | Shows hidden files. |
-| Vim | Runs `app/vim/vim-setup.sh` and installs coc.nvim's Node dependencies. |
-| ai repo sync | Checks that `~/Developer/ai` has its hourly GitHub sync on and no sync problem. If not, it's handled at the end (see below). |
+| Vim | Runs `app/vim/vim-setup.sh`: Vundle plugins, Solarized, coc.nvim (built with npm) and prettier. Its failures count in this script's summary. |
+| ai repo sync | Checks that `~/Developer/ai` has its hourly GitHub sync on and no sync problem. If not, it's handled at the end (see [The AI repo](#the-ai-repo)). |
 | Advanced Data Protection (end) | After the summary, if you haven't confirmed it yet, opens your Apple Account in System Settings so you can turn it on, then asks you to confirm. |
 | ai repo sync (end) | If needed, starts Claude Code with **Sync the ai repo** (Opus 5.5, max effort). Answer its questions, then type `/exit` to continue. |
 | Lockdown Mode (last) | After the summary, opens System Settings > Privacy & Security so you can click **Lockdown Mode > Turn On > Turn On & Restart**. Re-run after the restart to confirm. |
@@ -56,9 +63,46 @@ Without it, Apple holds the keys to most iCloud data, including iCloud Drive, Ph
 
 Apple only supports turning it on by hand in **System Settings > your name > iCloud > Advanced Data Protection**. It needs two-factor authentication, a recovery contact or recovery key (keep the key in 1Password), and every device on the account up to date. Apple offers no way for a script to read whether it's on, so the script records your confirmation in `~/setup/.adp-confirmed` and shows it as confirmed on later runs. Delete that file to be asked again.
 
-### ai repo sync
+### The AI repo
 
-`~/Developer/ai` syncs between Macs through the private GitHub repo `JoseBarrios/ai`, using an hourly launchd job from that repo (`scripts/install-sync.sh`). The script passes this check when that job is loaded and hasn't flagged a problem (`~/Library/Logs/ai-sync.last` is empty). Otherwise, at the end of an interactive run, it starts Claude Code in this repo with **Sync the ai repo**: Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything, and installs the job, following [`CLAUDE.md`](../../CLAUDE.md). It runs before Lockdown Mode, which restarts the Mac.
+`~/Developer/ai` holds your skills, shared agent instructions (`AGENTS.md`) and scheduled task prompts. It's private, so it's cloned over SSH, after your key is on GitHub.
+
+If `~/Developer/ai` already exists, the script never overwrites your work:
+
+| State | What the script does |
+|---|---|
+| Behind GitHub, nothing uncommitted | Fast-forwards to GitHub. |
+| Behind GitHub, uncommitted changes | Nothing. Asks you to commit them first. |
+| Behind GitHub, which adds files that already exist here (untracked or gitignored, e.g. in `private/`) | Nothing. Lists the files so you can move them aside. |
+| Commits that aren't on GitHub | Nothing. Asks you to push them. |
+| Both sides changed | Nothing. Points you to **Sync the ai repo** (see [README](../../README.md#sync-developerai)), which merges both sides. |
+| No remote (copied with a git bundle) | Adds GitHub as `origin`, then as above. |
+| HTTPS remote, with or without a token in it | Switches it to SSH, then as above. Remote URLs are printed without tokens. |
+| History unrelated to GitHub's | Nothing (it only adds `origin`). Points you to **Sync the ai repo**, which backs this copy up to a branch and merges it with GitHub. |
+| Empty folder | Clones into it. |
+| Not a git repo | Nothing. Asks you to move it aside. |
+
+A branch that tracks nothing is set to track GitHub's; one that already tracks a branch is left as is.
+
+It also sets `core.hooksPath` to `scripts/hooks`, so the repo's secret scan runs before each commit (the check fails if the hook is missing or not executable), and runs the repo's `scripts/install-sync.sh`: a launchd job (`io.barrios.ai-sync`) that syncs with GitHub every hour. It fast-forwards when behind, pushes when ahead, never merges or force-pushes, and shows a notification when it needs you. `private/` is gitignored, so a new Mac never gets it from GitHub; copy what you need from another Mac.
+
+Near the end, the script checks that the sync job is loaded and hasn't flagged a problem (`~/Library/Logs/ai-sync.last` is empty). If it has, or the copy needs a merge, an interactive run ends (before Lockdown Mode, which restarts the Mac) by starting Claude Code in this repo with **Sync the ai repo**: Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything, and turns on the job, following [`CLAUDE.md`](../../CLAUDE.md).
+
+### Claude Code
+
+All of this is user-level config, so it applies in every folder:
+
+- **`~/.claude/settings.json`** gets a `$schema` and these deny rules, merged with what's there (other keys are kept, nothing is duplicated, and an existing file is backed up as `settings.json.bak.<time>` when it changes):
+
+  ```
+  Read(~/.ssh/**)  Read(~/.gnupg/**)  Read(~/.filevault/**)  Read(//**/.env)  Read(//**/.env.*)
+  ```
+
+  They stop Claude's file tools (Read, Edit, Write) from opening keys, the FileVault fallback file or `.env` files. `//` starts at the root of the disk, so the `.env` rules cover every folder, not just the one Claude starts in.
+- **`~/.claude/CLAUDE.md`** gets the line `@~/Developer/ai/AGENTS.md`, so every session follows your shared rules. Anything else in the file is kept.
+- **Skills:** `claude plugin marketplace add ~/Developer/ai --scope user`, then `claude plugin install jose-skills@barrios-ai --scope user`. Only a user-scope install counts, so the skills load in every folder. The marketplace is read in place, so skills you pull or edit load in the next session.
+
+Local MCP servers in `~/Developer/ai/mcp/` aren't installed: they run on the hub Mac only.
 
 ### Git Configuration
 
@@ -90,6 +134,7 @@ The global ignore file (`~/.config/git/ignore`, or your existing `core.excludesF
 ## Not Automated
 
 - **Existing private keys on disk** (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`) are left alone. Import them into 1Password and delete them if you still need them.
+- **Signing in** to the Claude app, Claude Code and Claude in Chrome. The summary reminds you about the app when it's first installed, and lists Claude Code until it's logged in and Claude in Chrome until it's installed.
 
 ## Secrets
 
@@ -107,14 +152,17 @@ The script uses `set -uo pipefail` without `-e`. An `ERR` trap logs each failed 
 - If FileVault is waiting on a deferred enable from the old script, log out and back in, then re-run.
 - Homebrew `node` from the old script is no longer installed but isn't removed; nvm's Node comes first on `PATH`.
 - `gpg.program` from the old script is left in place but unused, since signing is now SSH.
+- A `~/Developer/ai` copied with a git bundle (no remote) gets GitHub as its remote; see [The AI repo](#the-ai-repo).
+- Old YouCompleteMe or tern_for_vim checkouts in `~/setup/vim/bundle` are no longer rebuilt. `.vimrc` doesn't load them; delete them if you like.
 
 ## Repository Context
 
 ```
 setup-os/
 ├── app/
-│   ├── vim/
-│   └── vimrc
+│   └── vim/
+│       ├── .vimrc         ← linked to ~/.vimrc
+│       └── vim-setup.sh
 ├── os/
 │   ├── linux/
 │   │   ├── kali.sh
@@ -122,6 +170,8 @@ setup-os/
 │   └── mac/
 │       ├── osx.sh        ← this script
 │       └── README.md
+├── CLAUDE.md
+├── README.md
 ├── .gitignore
 └── LICENSE (MIT)
 ```

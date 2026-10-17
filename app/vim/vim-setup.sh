@@ -1,11 +1,11 @@
 #!/bin/bash
-# Vim setup script — installs Vundle, creates directory structure, symlinks dotfiles,
+# Vim setup script: installs Vundle, creates directory structure, symlinks dotfiles,
 # installs plugins, and configures solarized colors.
 # Designed to be idempotent: safe to run multiple times without side effects.
 # When an error occurs and Claude Code is available, it automatically asks Claude to debug.
 #
 # All generated artifacts (bundles, colors, backups, swap, undo) are stored in
-# ~/setup/vim/ — NOT inside the git repository — to avoid accidentally committing them.
+# ~/setup/vim/, NOT inside the git repository, to avoid accidentally committing them.
 # Only the source .vimrc config lives in the repo.
 
 # Treat unset variables as errors (-u) and ensure piped commands propagate failures (-o pipefail).
@@ -16,16 +16,17 @@ set -uo pipefail
 # Counter to track how many verification tests fail during setup.
 FAIL_COUNT=0
 
-# Path to the script itself — used to provide context to Claude when debugging errors.
+# Path to the script itself, used to provide context to Claude when debugging errors.
 SELF_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 ###############################
 #   ERROR HANDLING            #
 ###############################
 
-# Automatic error handler — triggered on any command failure.
+# Automatic error handler, triggered on any command failure.
 # Captures the failed command, exit code, and line number, then asks Claude to debug.
-# The script does NOT exit — it logs the error and continues so the user can review.
+# The script does NOT exit: it logs the error and continues so the user can review.
+# shellcheck disable=SC2329  # invoked by the ERR trap
 function on_error {
     local exit_code=$?
     local line_number=$1
@@ -51,15 +52,15 @@ System info:
 - Architecture: $(uname -m)
 
 Provide a concise diagnosis and a fix. Do not rewrite the entire script." 2>/dev/null || \
-            echo "  (Claude could not be reached — debug manually)"
+            echo "  (Claude could not be reached, debug manually)"
         echo ""
     else
-        echo "  Claude Code is not yet installed — install it to enable auto-debugging."
+        echo "  Claude Code is not installed yet, so no automatic debugging."
     fi
 }
 
 # Register the ERR trap. It fires on any command that returns a non-zero exit code.
-# IMPORTANT: This does NOT cause the script to exit — it just calls on_error and continues.
+# IMPORTANT: This does NOT cause the script to exit; it just calls on_error and continues.
 trap 'on_error $LINENO' ERR
 
 ###############################
@@ -120,13 +121,10 @@ function verify_cmd {
 # This ensures paths are correct regardless of the caller's working directory.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# The repo's app/ directory — contains the source .vimrc config file (read-only, committed).
-REPO_APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 # Path to the source .vimrc in the repository.
 REPO_VIMRC="$SCRIPT_DIR/.vimrc"
 
-# All generated vim artifacts live in ~/setup/vim/ — outside the git repo.
+# All generated vim artifacts live in ~/setup/vim/, outside the git repo.
 # This prevents bundles, colors, swap files, etc. from being accidentally committed.
 VIM_HOME="$HOME/setup/vim"
 
@@ -144,7 +142,7 @@ vimundo="$VIM_HOME/undo"
 #   FUNCTIONS   #
 #################
 
-# Create a directory if it doesn't already exist. Idempotent — reports status either way.
+# Create a directory if it doesn't already exist. Idempotent: reports status either way.
 # Usage: makeDirectory <path>
 function makeDirectory {
     if [ ! -d "$1" ]; then
@@ -211,7 +209,7 @@ echo "==> Creating symlinks..."
 # Symlink ~/.vimrc -> the repo's source .vimrc (config is versioned in git).
 VIMRC_LINK="$HOME/.vimrc"
 if [ -L "$VIMRC_LINK" ] && [ "$(readlink "$VIMRC_LINK")" = "$REPO_VIMRC" ]; then
-    # Symlink already correct — skip (idempotent).
+    # Symlink already correct: skip (idempotent).
     echo "Symlink for .vimrc already exists and is correct"
 else
     # Back up any existing .vimrc before replacing it.
@@ -226,7 +224,7 @@ fi
 # Symlink ~/.vim -> ~/setup/vim/ (artifacts directory, outside the git repo).
 VIM_LINK="$HOME/.vim"
 if [ -L "$VIM_LINK" ] && [ "$(readlink "$VIM_LINK")" = "$VIM_HOME" ]; then
-    # Symlink already correct — skip (idempotent).
+    # Symlink already correct: skip (idempotent).
     echo "Symlink for .vim already exists and is correct"
 else
     # Back up any existing .vim before replacing it.
@@ -259,7 +257,7 @@ if [ ! -f "$vimcolors/solarized.vim" ]; then
     # Copy the color scheme file to our Vim colors directory.
     cp "$SOLARIZED_TMP/vim-colors-solarized/colors/solarized.vim" "$vimcolors"
 
-    # Clean up the cloned repo — we only needed the one file.
+    # Clean up the cloned repo; we only needed the one file.
     rm -rf "$SOLARIZED_TMP"
 fi
 
@@ -273,55 +271,23 @@ echo "==> Installing vim plugins..."
 # then quit all buffers. Vundle installs missing plugins and skips existing ones.
 vim +PluginInstall +qall
 
-# --- Fix npm vulnerabilities in plugins ---
-echo "==> Running npm audit fix for plugins..."
+# --- Build coc.nvim ---
+echo "==> Building coc.nvim..."
 
-# coc.nvim runs npm install as a prepare step and may have vulnerable dependencies.
-if [ -d "$vimbundle/coc.nvim/" ] && [ -f "$vimbundle/coc.nvim/package.json" ]; then
-    pushd "$vimbundle/coc.nvim/"
-    npm audit fix 2>/dev/null || true
-    popd
-fi
-
-# --- Configure individual plugins that need extra setup ---
-echo "==> Configuring plugins..."
-
-# tern_for_vim — JavaScript code analysis engine for Vim.
-# Only configure if the plugin was installed by Vundle.
-if [ -d "$vimbundle/tern_for_vim/" ]; then
-    # pushd saves the current directory and changes to the plugin directory.
-    pushd "$vimbundle/tern_for_vim/"
-
-    # Install tern's Node.js dependencies. npm install is idempotent —
-    # it only installs/updates packages that are missing or outdated.
-    npm install
-
-    # popd restores the previous working directory.
-    popd
-
-    # Test: Verify npm installed its dependencies (lock file exists).
-    verify_file "$vimbundle/tern_for_vim/node_modules/.package-lock.json"
-fi
-
-# YouCompleteMe — fast, fuzzy code completion engine for Vim.
-# Only configure if the plugin was installed by Vundle.
-if [ -d "$vimbundle/YouCompleteMe/" ]; then
-    # Change to the YCM plugin directory.
-    pushd "$vimbundle/YouCompleteMe/"
-
-    # Initialize and update all of YCM's git submodules recursively.
-    git submodule update --init --recursive
-
-    # YCM requires cmake for building and macvim for full feature support.
-    # brew install is idempotent — skips already-installed packages.
-    brew install cmake macvim
-
-    # Run YCM's install script with all language completers, including clangd for C/C++.
-    # Use python3 explicitly — macOS no longer ships a bare `python` binary.
-    python3 install.py --all --clangd-completer
-
-    # Restore the previous working directory.
-    popd
+# Vundle checks out coc.nvim's source branch, which has to be built with npm
+# (its prepare step). npm audit fix then patches vulnerable dependencies.
+# The subshell keeps the cd from leaking into the rest of the script.
+# (YouCompleteMe and tern_for_vim used to be set up here; .vimrc no longer
+# loads either, and coc.nvim replaces both.)
+if [ -f "$vimbundle/coc.nvim/package.json" ]; then
+    if command -v npm &>/dev/null; then
+        (cd "$vimbundle/coc.nvim" && npm install && { npm audit fix >/dev/null 2>&1 || true; })
+        # Test: Verify the build ran (npm skips it with ignore-scripts=true).
+        verify_file "$vimbundle/coc.nvim/build/index.js"
+    else
+        echo "  [FAIL] npm is not installed, so coc.nvim was not built"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
 fi
 
 # --- Install Prettier (code formatter used by vim-prettier plugin) ---
@@ -352,3 +318,10 @@ else
     fi
 fi
 echo "==============================="
+
+# Exit non-zero on any failure so a caller (osx.sh) can count it.
+if [ "$FAIL_COUNT" -eq 0 ]; then
+    exit 0
+else
+    exit 1
+fi
