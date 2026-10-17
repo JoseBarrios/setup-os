@@ -468,6 +468,30 @@ else
     manual "Turn on Lockdown Mode in System Settings > Privacy & Security (it restarts the Mac), then re-run to confirm."
 fi
 
+echo "==> Checking Advanced Data Protection for iCloud..."
+# Without it, Apple holds the keys to most iCloud data (iCloud Drive, Photos,
+# Notes, device backups). Apple only lets you turn it on by hand in System
+# Settings, and offers no way for a script to read whether it's on. So the
+# script guides you through it at the end and remembers your confirmation in
+# ~/setup/.adp-confirmed. Turning it on once covers your whole Apple Account.
+ADP_MARKER="$SETUP_HOME/.adp-confirmed"
+ADP_PENDING=false
+ICLOUD_ACCOUNTS="$(defaults read MobileMeAccounts Accounts 2>/dev/null || true)"
+case "$ICLOUD_ACCOUNTS" in
+    *AccountID*)
+        if [ -s "$ADP_MARKER" ]; then
+            pass "Advanced Data Protection: you confirmed it's on ($(head -n 1 "$ADP_MARKER")); scripts can't check it"
+        else
+            ADP_PENDING=true
+            manual "Turn on Advanced Data Protection: System Settings > your name > iCloud > Advanced Data Protection > Turn On, then re-run and confirm."
+        fi
+        ;;
+    *)
+        info "Not signed in to iCloud on this Mac, so Advanced Data Protection doesn't apply yet"
+        ;;
+esac
+unset ICLOUD_ACCOUNTS
+
 ###########################
 #   CORE BREW PACKAGES    #
 ###########################
@@ -849,6 +873,29 @@ if [ -n "$MANUAL_NOTES" ]; then
     printf '%s' "$MANUAL_NOTES"
 fi
 echo "==============================="
+
+###############################
+#   ADVANCED DATA PROTECTION  #
+###############################
+# Before Lockdown Mode, which restarts the Mac.
+if [ "$ADP_PENDING" = true ] && is_interactive; then
+    echo ""
+    echo "==> Turn on Advanced Data Protection for iCloud"
+    echo "  In the window that opens: your name > iCloud > Advanced Data Protection > Turn On."
+    echo "  It needs a recovery contact or recovery key (keep the key in 1Password), and every"
+    echo "  device on your Apple Account must be up to date. It doesn't restart the Mac."
+    ADP_REPLY=""
+    read -r -p "  Press Enter to open the setting (or type s to skip for now): " ADP_REPLY
+    if [ "$ADP_REPLY" != "s" ]; then
+        open "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings"
+        ADP_DONE=""
+        read -r -p "  Type y once it shows Advanced Data Protection is on (Enter to skip): " ADP_DONE
+        if [ "$ADP_DONE" = "y" ] || [ "$ADP_DONE" = "Y" ]; then
+            mkdir -p "$SETUP_HOME" && date +%Y-%m-%d > "$ADP_MARKER"
+            echo "  Saved. Later runs show it as confirmed."
+        fi
+    fi
+fi
 
 ###########################
 #   LOCKDOWN MODE (LAST)  #

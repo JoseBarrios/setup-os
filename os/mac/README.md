@@ -27,6 +27,7 @@ Steps run in this order.
 | Disk encryption | Turns on FileVault full-disk encryption and reports progress while the disk encrypts. The recovery key goes straight into 1Password as `FileVault Recovery Key - <host>` and is never written to disk. If 1Password isn't ready, it is kept in `~/.filevault/recovery_key.plist` (owner-only) and moved into 1Password on the next run. |
 | Firewall | Turns on the application firewall and stealth mode. |
 | Lockdown Mode | Checks whether it's on. If not, it's turned on as the very last step (see below). |
+| Advanced Data Protection | If the Mac is signed in to iCloud, checks whether you've confirmed it's on. If not, it's guided at the end (see below). |
 | Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep`, plus the Hack Nerd Font. |
 | pyenv | Adds pyenv's init lines to `~/.zshrc`. |
 | Node | Installs nvm and the current Node.js LTS. nvm is the only Node manager. |
@@ -38,6 +39,7 @@ Steps run in this order.
 | Terminal | Imports Solarized Dark and sets it as the default profile, with Hack Nerd Font Mono 14pt. |
 | Finder | Shows hidden files. |
 | Vim | Runs `app/vim/vim-setup.sh` and installs coc.nvim's Node dependencies. |
+| Advanced Data Protection (end) | After the summary, if you haven't confirmed it yet, opens your Apple Account in System Settings so you can turn it on, then asks you to confirm. |
 | Lockdown Mode (last) | After the summary, opens System Settings > Privacy & Security so you can click **Lockdown Mode > Turn On > Turn On & Restart**. Re-run after the restart to confirm. |
 
 ### Lockdown Mode
@@ -45,6 +47,12 @@ Steps run in this order.
 Apple only supports turning Lockdown Mode on in System Settings, and doing so restarts the Mac, so the script runs it last and guides you through it. The script checks the result by reading `LDMGlobalEnabled` in your global preferences (`defaults read -g LDMGlobalEnabled` is `1` when it's on). Apple doesn't document that key, but Mac admins use it to detect Lockdown Mode.
 
 While it's on: configuration profiles and MDM enrollment are blocked, some web fonts and web features are blocked, unknown FaceTime calls and most Messages attachments are blocked, and on Apple silicon laptops new wired accessories need approval while unlocked. Homebrew, Git, SSH and 1Password are unaffected.
+
+### Advanced Data Protection
+
+Without it, Apple holds the keys to most iCloud data, including iCloud Drive, Photos, Notes and device backups. With it, only your devices can decrypt that data. Turning it on once covers every device on your Apple Account.
+
+Apple only supports turning it on by hand in **System Settings > your name > iCloud > Advanced Data Protection**. It needs two-factor authentication, a recovery contact or recovery key (keep the key in 1Password), and every device on the account up to date. Apple offers no way for a script to read whether it's on, so the script records your confirmation in `~/setup/.adp-confirmed` and shows it as confirmed on later runs. Delete that file to be asked again.
 
 ### Git Configuration
 

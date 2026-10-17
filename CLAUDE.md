@@ -20,7 +20,7 @@ Jose has done steps 1 to 4 of `README.md`. You can't answer password, sudo or br
    - Make sure `~/.claude/CLAUDE.md` has the line `@~/Developer/ai/AGENTS.md`. Add it if missing and keep everything else in the file.
    - Skip `mcp/`: local MCP servers run on the hub Mac only. If Jose says this Mac is the new hub, stop and ask.
    - Don't edit files inside `~/Developer/ai`; its changes must be logged in its `CHANGELOG.md`. Tell Jose if something there looks wrong.
-3. **Run the setup script.** Read `os/mac/README.md` and `os/mac/osx.sh`. Ask Jose to run `~/Developer/setup-os/os/mac/osx.sh` in the second tab and to type `s` at the Lockdown Mode prompt for now, since turning it on restarts the Mac. Explain prompts when asked. When something fails, read the output Jose pastes and fix the cause. If it's a bug in `osx.sh`, fix the script, check it with `bash -n` (and `shellcheck` if installed), and have Jose re-run it.
+3. **Run the setup script.** Read `os/mac/README.md` and `os/mac/osx.sh`. Ask Jose to run `~/Developer/setup-os/os/mac/osx.sh` in the second tab, to turn on Advanced Data Protection at its prompt, and to type `s` at the Lockdown Mode prompt for now, since turning it on restarts the Mac. Explain prompts when asked. When something fails, read the output Jose pastes and fix the cause. If it's a bug in `osx.sh`, fix the script, check it with `bash -n` (and `shellcheck` if installed), and have Jose re-run it.
 4. **Finish.** Once the script's summary shows no failures:
    - Switch this repo to SSH: `git -C ~/Developer/setup-os remote set-url origin git@github.com:JoseBarrios/setup-os.git`
    - Check each of these and report pass or fail:

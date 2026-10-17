@@ -75,6 +75,6 @@ Claude can't type passwords, so you run the script in a second Terminal tab (⌘
 ~/Developer/setup-os/os/mac/osx.sh
 ```
 
-At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude switches this repo to SSH, checks everything and lists what's left.
+At the Advanced Data Protection prompt, press Enter and turn it on; it doesn't restart the Mac. At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude switches this repo to SSH, checks everything and lists what's left.
 
 Last, run the script again and press Enter at the Lockdown Mode step. After the restart, run it once more: it should end with **ALL CHECKS PASSED** and nothing under **Still needs you**.
