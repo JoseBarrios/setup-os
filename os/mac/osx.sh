@@ -856,6 +856,27 @@ if [ -d "$SETUP_HOME/vim/bundle/coc.nvim" ]; then
     (cd "$SETUP_HOME/vim/bundle/coc.nvim" && npm install)
 fi
 
+###############################
+#   AI REPO SYNC              #
+###############################
+# ~/Developer/ai syncs between Macs through the private GitHub repo
+# JoseBarrios/ai, using an hourly launchd job from that repo. Bringing a copy
+# in line can need a merge and a question or two, so Claude Code does it
+# interactively at the end of the run ("Sync the ai repo" in CLAUDE.md).
+# Here we only check whether that's needed.
+echo "==> Checking the ai repo's GitHub sync..."
+AI_REPO="$HOME/Developer/ai"
+AI_SYNC_LABEL="io.barrios.ai-sync"
+AI_SYNC_PENDING=false
+if [ ! -d "$AI_REPO/.git" ]; then
+    manual "Copy ~/Developer/ai to this Mac (README.md step 3), then re-run."
+elif launchctl print "gui/$(id -u)/$AI_SYNC_LABEL" >/dev/null 2>&1 && [ ! -s "$HOME/Library/Logs/ai-sync.last" ]; then
+    pass "~/Developer/ai syncs with GitHub hourly"
+else
+    AI_SYNC_PENDING=true
+    manual "Sync ~/Developer/ai with GitHub: re-run this script, or in Claude Code from ~/Developer/setup-os type: Sync the ai repo"
+fi
+
 ###########################
 #   SUMMARY               #
 ###########################
@@ -894,6 +915,23 @@ if [ "$ADP_PENDING" = true ] && is_interactive; then
             mkdir -p "$SETUP_HOME" && date +%Y-%m-%d > "$ADP_MARKER"
             echo "  Saved. Later runs show it as confirmed."
         fi
+    fi
+fi
+
+###############################
+#   AI REPO SYNC (CLAUDE)     #
+###############################
+# Before Lockdown Mode, which restarts the Mac.
+if [ "$AI_SYNC_PENDING" = true ] && is_interactive && command -v claude &>/dev/null; then
+    echo ""
+    echo "==> Sync ~/Developer/ai with GitHub"
+    echo "  Claude Code backs up this Mac's copy to a GitHub branch, merges it with GitHub"
+    echo "  without losing anything, and turns on the hourly sync. Answer its questions,"
+    echo "  then type /exit to come back here."
+    AI_SYNC_REPLY=""
+    read -r -p "  Press Enter to start Claude (or type s to skip for now): " AI_SYNC_REPLY
+    if [ "$AI_SYNC_REPLY" != "s" ]; then
+        (cd "$REPO_ROOT" && claude --model claude-opus-5-5 --effort max "Sync the ai repo") || true
     fi
 fi
 

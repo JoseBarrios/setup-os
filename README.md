@@ -75,13 +75,13 @@ Claude can't type passwords, so you run the script in a second Terminal tab (⌘
 ~/Developer/setup-os/os/mac/osx.sh
 ```
 
-At the Advanced Data Protection prompt, press Enter and turn it on; it doesn't restart the Mac. At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude switches this repo to SSH, checks everything and lists what's left.
+At the Advanced Data Protection prompt, press Enter and turn it on; it doesn't restart the Mac. At the ai repo sync prompt, press Enter: Claude Code syncs `~/Developer/ai` with GitHub in that tab; type `/exit` when it's done. At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude switches this repo to SSH, checks everything and lists what's left.
 
 Last, run the script again and press Enter at the Lockdown Mode step. After the restart, run it once more: it should end with **ALL CHECKS PASSED** and nothing under **Still needs you**.
 
 ## Sync `~/Developer/ai`
 
-Both Macs sync `~/Developer/ai` through the private GitHub repo `JoseBarrios/ai`. To bring a Mac's copy in line and turn on its hourly sync:
+Both Macs sync `~/Developer/ai` through the private GitHub repo `JoseBarrios/ai`. Whenever a Mac's copy needs it, `osx.sh` ends by starting Claude Code with **Sync the ai repo**. To run it on its own:
 
 ```sh
 cd ~/Developer/setup-os
@@ -90,4 +90,4 @@ claude
 
 Then type **Sync the ai repo**. Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything from either side, and installs the hourly job. It follows [`CLAUDE.md`](CLAUDE.md).
 
-After that, the hourly job keeps the Mac in step. If both Macs change at once, it shows a notification: type **Sync the ai repo** again.
+After that, the hourly job keeps the Mac in step. If both Macs change at once, it shows a notification: re-run `osx.sh`, or type **Sync the ai repo** again.

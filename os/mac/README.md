@@ -39,7 +39,9 @@ Steps run in this order.
 | Terminal | Imports Solarized Dark and sets it as the default profile, with Hack Nerd Font Mono 14pt. |
 | Finder | Shows hidden files. |
 | Vim | Runs `app/vim/vim-setup.sh` and installs coc.nvim's Node dependencies. |
+| ai repo sync | Checks that `~/Developer/ai` has its hourly GitHub sync on and no sync problem. If not, it's handled at the end (see below). |
 | Advanced Data Protection (end) | After the summary, if you haven't confirmed it yet, opens your Apple Account in System Settings so you can turn it on, then asks you to confirm. |
+| ai repo sync (end) | If needed, starts Claude Code with **Sync the ai repo** (Opus 5.5, max effort). Answer its questions, then type `/exit` to continue. |
 | Lockdown Mode (last) | After the summary, opens System Settings > Privacy & Security so you can click **Lockdown Mode > Turn On > Turn On & Restart**. Re-run after the restart to confirm. |
 
 ### Lockdown Mode
@@ -53,6 +55,10 @@ While it's on: configuration profiles and MDM enrollment are blocked, some web f
 Without it, Apple holds the keys to most iCloud data, including iCloud Drive, Photos, Notes and device backups. With it, only your devices can decrypt that data. Turning it on once covers every device on your Apple Account.
 
 Apple only supports turning it on by hand in **System Settings > your name > iCloud > Advanced Data Protection**. It needs two-factor authentication, a recovery contact or recovery key (keep the key in 1Password), and every device on the account up to date. Apple offers no way for a script to read whether it's on, so the script records your confirmation in `~/setup/.adp-confirmed` and shows it as confirmed on later runs. Delete that file to be asked again.
+
+### ai repo sync
+
+`~/Developer/ai` syncs between Macs through the private GitHub repo `JoseBarrios/ai`, using an hourly launchd job from that repo (`scripts/install-sync.sh`). The script passes this check when that job is loaded and hasn't flagged a problem (`~/Library/Logs/ai-sync.last` is empty). Otherwise, at the end of an interactive run, it starts Claude Code in this repo with **Sync the ai repo**: Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything, and installs the job, following [`CLAUDE.md`](../../CLAUDE.md). It runs before Lockdown Mode, which restarts the Mac.
 
 ### Git Configuration
 
