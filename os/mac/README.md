@@ -10,7 +10,7 @@ Sets up a Mac for development and for Claude: security settings, Homebrew and de
 ./os/mac/osx.sh
 ```
 
-Run it as your normal user (not with `sudo`); it asks for your password once. The first run stops so you can sign in to 1Password. Each run ends with a pass/fail summary and a **Still needs you** list.
+Run it as your normal user (not with `sudo`); it asks for your password once. On a standard (non-administrator) account it asks for an administrator instead; see [Standard accounts](#standard-accounts). The first run stops so you can sign in to 1Password. Each run ends with a pass/fail summary and a **Still needs you** list.
 
 Optional overrides:
 
@@ -24,17 +24,17 @@ Steps run in this order.
 
 | Step | What happens |
 |---|---|
-| Homebrew | Installs Homebrew (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) and adds it to `~/.zprofile`. |
+| Homebrew | Installs Homebrew (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) and adds it to `~/.zprofile`. Installs it only from an administrator account, and updates it only from the account that owns it. |
 | Oh My Zsh | Installed before anything else writes to `~/.zshrc`, because its installer replaces that file. |
 | Claude Code | Installed early (native installer, `~/.local/bin/claude`, updates itself) so it can debug failures in the rest of the run. |
 | 1Password | Installs the app and CLI (`op`). If the CLI isn't signed in, the script pauses and asks you to sign in and turn on **Settings > Developer > Integrate with 1Password CLI** and **Use the SSH agent**. |
-| Disk encryption | Turns on FileVault full-disk encryption and reports progress while the disk encrypts. The recovery key goes straight into 1Password as `FileVault Recovery Key - <host>` and is never written to disk. If 1Password isn't ready, it is kept in `~/.filevault/recovery_key.plist` (owner-only) and moved into 1Password on the next run. |
+| Disk encryption | Turns on FileVault full-disk encryption and reports progress while the disk encrypts. The recovery key goes straight into 1Password as `FileVault Recovery Key - <host>` and is never written to disk. If 1Password isn't ready, it is kept in `~/.filevault/recovery_key.plist` (owner-only) and moved into 1Password on the next run. On a standard account it only checks; turning it on needs an administrator account. |
 | Firewall | Turns on the application firewall and stealth mode. |
 | Lockdown Mode | Checks whether it's on. If not, it's turned on as the very last step (see below). |
 | Advanced Data Protection | If the Mac is signed in to iCloud, checks whether you've confirmed it's on. If not, it's guided at the end (see below). |
-| Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq uv shellcheck`, plus the Hack Nerd Font. `jq` edits Claude Code's settings, `uv` runs Python MCP servers (`uvx`), `shellcheck` lints this script. |
+| Packages | `cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq shellcheck`, plus uv and the Hack Nerd Font. `jq` edits Claude Code's settings, `shellcheck` lints this script. Missing packages install in one go. `uv` runs Python MCP servers (`uvx`); Homebrew always installs the newest uv, usually only days old, so the script installs a pinned release at least 7 days old (`UV_VERSION`) from GitHub into `~/.local/bin`, checked by SHA-256. A uv that's already installed is left as is. The font cask only installs for Homebrew's owner, so other accounts get the same release from GitHub, checked by SHA-256. |
 | Claude apps | Installs the Claude desktop app and Google Chrome (skipped if already in `/Applications`; both update themselves). Checks Chrome for Claude in Chrome and, if it's missing, tells you where to get it. |
-| Keep awake | Desktop Macs only: turns system sleep off, starts the Mac again after a power cut, installs Amphetamine, and opens Claude and Amphetamine at login. See [Keep awake](#keep-awake). |
+| Keep awake | Desktop Macs only: turns system sleep off, starts the Mac again after a power cut, installs Amphetamine (administrator accounts only), and opens Claude and Amphetamine at login. See [Keep awake](#keep-awake). |
 | pyenv | Adds pyenv's init lines to `~/.zshrc`. |
 | Node | Installs nvm and the current Node.js LTS. nvm is the only Node manager. |
 | GPG | Sets `pinentry-mac` for passphrase prompts. Kept for file encryption; Git signing uses SSH. |
@@ -71,12 +71,24 @@ Claude on your phone can use this Mac only while the Mac is awake and the Claude
 
 - Turns system sleep off (`pmset -a sleep 0`). The display still sleeps.
 - Starts the Mac again after a power cut (`pmset -a autorestart 1`).
-- Installs [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) from the Mac App Store with `mas`, which needs you signed in to the App Store. Its settings can't be scripted, so the first time, set it to start a session when it launches, **Indefinitely**.
+- Installs [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) from the Mac App Store with `mas`, which needs you signed in to the App Store. `mas` needs sudo, so on a standard account the summary asks you to install it from the App Store. Its settings can't be scripted, so the first time, set it to start a session when it launches, **Indefinitely**.
 - Adds a login item (`~/Library/LaunchAgents/local.setup-os.login-apps.plist`) that opens Claude and Amphetamine each time you log in, and opens them now.
 
 Laptops are skipped, since they'd drain the battery. `KEEP_AWAKE=1` turns this on for any Mac (laptops have no power-cut setting, so that step is skipped); `KEEP_AWAKE=0` skips it but doesn't undo an earlier run.
 
 After a restart (a power cut or a macOS update), Claude is offline until you log in on the Mac: FileVault, which this script turns on, turns off automatic login.
+
+### Standard accounts
+
+The script also runs from a standard (non-administrator) account, such as a separate account for Claude on a Mac an administrator already set up. It doesn't ask for your password at the start. Instead:
+
+- Each step that needs an administrator (the firewall, `pmset`) opens a macOS window asking for an administrator's name and password, and only when the setting isn't already on. The command goes to `osascript` as an argument, so the password is typed into macOS, never into the script.
+- Homebrew belongs to the account that installed it. From any other account, missing packages and apps install as that account (`sudo -u <owner> -i brew install ...`) in one go, after an administrator approves in the same window. Homebrew's output appears when the install finishes. Homebrew is updated only from its owner's account.
+- If Homebrew isn't installed, the summary asks you to install it from an administrator account.
+- FileVault is only checked. If it's off, the summary asks you to turn it on from an administrator account, since `fdesetup` asks for the password of the account it enables.
+- Amphetamine is listed under **Still needs you**, to install from the App Store.
+
+Clicking **Cancel** in the window, or running without a terminal (stdin and stdout not a terminal), skips that step, and its check fails.
 
 ### The AI repo
 
@@ -99,9 +111,9 @@ If `~/Developer/ai` already exists, the script never overwrites your work:
 
 A branch that tracks nothing is set to track GitHub's; one that already tracks a branch is left as is.
 
-It also sets `core.hooksPath` to `scripts/hooks`, so the repo's secret scan runs before each commit (the check fails if the hook is missing or not executable), and runs the repo's `scripts/install-sync.sh`: a launchd job (`io.barrios.ai-sync`) that syncs with GitHub every hour. It fast-forwards when behind, pushes when ahead, never merges or force-pushes, and shows a notification when it needs you. `private/` is gitignored, so a new Mac never gets it from GitHub; copy what you need from another Mac.
+It also sets `core.hooksPath` to `scripts/hooks`, so the repo's secret scan runs before each commit (the check fails if the hook is missing or not executable), and runs the repo's `scripts/install-sync.sh`: a launchd job (`io.barrios.ai-sync`) that syncs with GitHub every hour. It fast-forwards when behind, pushes when ahead, never merges or force-pushes, and shows a notification when it needs you. If the repo has no `scripts/install-sync.sh` yet, **Still needs you** says so; re-run once the ai repo on GitHub has it. `private/` is gitignored, so a new Mac never gets it from GitHub; copy what you need from another Mac.
 
-Near the end, the script checks that the sync job is loaded and hasn't flagged a problem (`~/Library/Logs/ai-sync.last` is empty). If it has, or the copy needs a merge, an interactive run ends (before Lockdown Mode, which restarts the Mac) by starting Claude Code in this repo with **Sync the ai repo**: Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything, and turns on the job, following [`CLAUDE.md`](../../CLAUDE.md).
+Near the end, the script checks that the sync job is loaded and hasn't flagged a problem (`~/Library/Logs/ai-sync.last` is empty). If it has, or the copy needs a merge, an interactive run ends (before Lockdown Mode, which restarts the Mac) by starting Claude Code in this repo with **Sync the ai repo**: Claude backs up the Mac's copy to a GitHub branch, merges it with GitHub without losing anything, and turns on the job, following [`CLAUDE.md`](../../CLAUDE.md). It isn't started just because `scripts/install-sync.sh` is missing, since Claude can't turn on a job that isn't in the repo.
 
 ### Claude Code
 
@@ -150,12 +162,13 @@ The global ignore file (`~/.config/git/ignore`, or your existing `core.excludesF
 
 - **Existing private keys on disk** (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`) are left alone. Import them into 1Password and delete them if you still need them.
 - **Signing in** to the Claude app, Claude Code and Claude in Chrome. The summary reminds you about the app when it's first installed, and lists Claude Code until it's logged in and Claude in Chrome until it's installed.
-- **Amphetamine:** signing in to the App Store so it can install, and its settings (see [Keep awake](#keep-awake)).
+- **Amphetamine:** signing in to the App Store so it can install (on a standard account, installing it from the App Store yourself), and its settings (see [Keep awake](#keep-awake)).
 
 ## Secrets
 
 - Secrets never go into command-line arguments. The FileVault recovery key is piped to `op` as JSON built by a shell builtin.
 - No private key is ever written to disk or printed.
+- On a standard account, an administrator's password goes into a macOS window, never into the script, its arguments or its output.
 - Nothing secret is sent to Claude when the error handler asks it to debug a failure.
 
 ## Error Handling

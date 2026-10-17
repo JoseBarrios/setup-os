@@ -15,7 +15,13 @@ Setup scripts for Jose's machines. Mac: `os/mac/osx.sh`, documented in `os/mac/R
 Jose has done steps 1 and 2 of `README.md`. You can't answer password, sudo or browser prompts, so never run `osx.sh` or `sudo` yourself. Jose runs them in a second Terminal tab.
 
 1. **Check the basics:** `claude --version`, `xcode-select -p` and `git --version`. If something is missing, point Jose to the `README.md` step that covers it.
-2. **Run the setup script.** Read `os/mac/README.md` and `os/mac/osx.sh`. Ask Jose to run `~/Developer/setup-os/os/mac/osx.sh` in the second tab, to turn on Advanced Data Protection at its prompt, to press Enter at the ai repo sync prompt if it shows one (it starts a second Claude Code session in that tab that runs "Sync the ai repo"), and to type `s` at the Lockdown Mode prompt for now, since turning it on restarts the Mac. Explain prompts when asked. When something fails, read the output Jose pastes and fix the cause. If it's a bug in `osx.sh`, fix the script, check it with `bash -n` and `shellcheck`, and have Jose re-run it.
+2. **Run the setup script.** Read `os/mac/README.md` and `os/mac/osx.sh`. Ask Jose to run it in the second tab under `script`, which logs everything to `~/setup/logs` (`-F` keeps the log current while it runs; piping through `tee` instead would break the script's prompts):
+
+   ```sh
+   mkdir -p ~/setup/logs && script -q -F ~/setup/logs/osx-$(date +%Y%m%d-%H%M%S).log ~/Developer/setup-os/os/mac/osx.sh
+   ```
+
+   Ask him to turn on Advanced Data Protection at its prompt, to press Enter at the ai repo sync prompt if it shows one (it starts a second Claude Code session in that tab that runs "Sync the ai repo"), and to type `s` at the Lockdown Mode prompt for now, since turning it on restarts the Mac. Explain prompts when asked. Read the newest log in `~/setup/logs` instead of asking Jose to paste output. When something fails, fix the cause. If it's a bug in `osx.sh`, fix the script, check it with `bash -n` and `shellcheck`, and have Jose re-run it.
 3. **The AI repo.** The script clones `~/Developer/ai` or fast-forwards it, and never overwrites local work. If it reports uncommitted changes, local commits, both sides changed or unrelated history there, show Jose what differs (`git -C ~/Developer/ai status -sb`, `git -C ~/Developer/ai log --oneline HEAD...origin/main`) and, once he agrees, follow "Sync the ai repo" below. Skip `mcp/`: local MCP servers run on the hub Mac only. If Jose says this Mac is the new hub, stop and ask.
 4. **Finish.** Once the script's summary shows no failures, check each of these and report pass or fail:
    - `claude doctor`, `claude auth status` and `gh auth status`
@@ -43,6 +49,6 @@ Bring this Mac's `~/Developer/ai` in line with GitHub (`JoseBarrios/ai`) and tur
    - Diverged: merge `origin/main` (add `--allow-unrelated-histories` if they share no history). Resolve every conflict so neither side loses a change. In `CHANGELOG.md`, keep every entry from both sides, grouped by date, newest first. Where the two versions disagree and the changelogs don't say which is newer, ask Jose. Add a `CHANGELOG.md` line describing the merge, run `scripts/check-secrets.sh`, then commit and push.
 
    Done when `git status -sb` shows `main...origin/main` with nothing ahead or behind.
-5. If `gh` isn't installed or logged in, set it up with Jose. Then run `scripts/install-sync.sh` and `scripts/sync.sh`, and show him the last lines of `~/Library/Logs/ai-sync.log`.
+5. If `gh` isn't installed or logged in, set it up with Jose. Then run `scripts/install-sync.sh` and `scripts/sync.sh`, and show him the last lines of `~/Library/Logs/ai-sync.log`. If the repo doesn't have those scripts, tell Jose and skip this step.
 6. Bring this repo's `master` in line with `origin/master` the same way: fast-forward or push. If it has diverged, stop and tell Jose.
 7. Report what was merged, anything uncertain, and the backup branch name.

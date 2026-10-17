@@ -45,9 +45,16 @@ TERMINAL_PROFILE="Solarized Dark xterm-256color"
 TERMINAL_FONT="HackNFM-Regular"
 TERMINAL_FONT_SIZE=14
 
-# jq edits Claude Code's settings.json, uv runs Python MCP servers (uvx), and
-# this script is linted with shellcheck.
-BREW_FORMULAE=(cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq uv shellcheck)
+# jq edits Claude Code's settings.json, and shellcheck lints this script.
+BREW_FORMULAE=(cmake vim git gh gnupg pinentry-mac pyenv yamllint ripgrep jq shellcheck)
+
+# uv runs Python MCP servers (uvx). Homebrew always installs the newest uv,
+# which is usually only days old, so a release at least 7 days old is pinned
+# here instead, checked by SHA-256. It goes in ~/.local/bin, so it needs no
+# administrator; `uv self update` updates it.
+UV_VERSION="0.13.0"
+UV_SHA256_AARCH64="a9c1b29002cf3c83f07fa9cd8a887a3be0107d90e23189721221e7257db8e3d6"
+UV_SHA256_X86_64="5f44dcbde809b632f47c36fadb241cb4d6f9af71d0c8f172b5d2026d3dde742c"
 
 # ~/Developer/ai: skills, shared instructions (AGENTS.md) and scheduled task
 # prompts for every AI tool. It's private on GitHub, so it's cloned over SSH
@@ -213,6 +220,122 @@ function brew_safe {
     fi
 }
 
+# True when this account is an administrator (group admin, GID 80 on macOS),
+# so it can use sudo. Matching the ID avoids a pipeline that pipefail could
+# fail, and group names with spaces.
+function is_admin {
+    case " $(id -G) " in *" 80 "*) return 0 ;; esac
+    return 1
+}
+
+# Run a command as root. An administrator uses sudo. A standard account can't,
+# so macOS asks for an administrator's name and password in a window instead.
+# The command goes to osascript as an argument (quoted with printf %q), so it
+# needs no AppleScript escaping, and the password never touches this script.
+# Its own messages go to stderr, so a caller's >/dev/null hides only the
+# command's output. A skip (no terminal) or Cancel returns 0: each caller
+# checks the result afterwards and reports it once.
+# Usage: admin_run <what it's for> <command...>
+function admin_run {
+    local reason="$1" cmd err rc
+    shift
+    if [ "$IS_ADMIN" = true ]; then
+        sudo "$@"
+        return
+    fi
+    if [ "$INTERACTIVE" != true ]; then
+        echo "  Skipped (needs an administrator): $reason" >&2
+        return 0
+    fi
+    # do shell script drops stderr when the command succeeds, so merge it.
+    cmd="$(printf '%q ' "$@")2>&1"
+    echo "  Asking for an administrator's name and password to $reason." >&2
+    echo "  (A macOS window; it may open behind this one.)" >&2
+    # osascript's output goes to the caller; its errors are kept to spot Cancel.
+    {
+        err="$(osascript \
+            -e 'on run argv' \
+            -e 'do shell script (item 1 of argv) with prompt (item 2 of argv) with administrator privileges without altering line endings' \
+            -e 'end run' \
+            "$cmd" "setup-os needs an administrator to $reason." 2>&1 1>&3)"
+        rc=$?
+    } 3>&1
+    case "$err" in
+        *"(-128)"*)
+            echo "  Skipped (cancelled): $reason" >&2
+            return 0
+            ;;
+    esac
+    [ -z "$err" ] || echo "$err" >&2
+    return "$rc"
+}
+
+# Install with Homebrew. Homebrew belongs to the account that installed it
+# (BREW_OWNER), so any other account installs as that account, with an
+# administrator's permission. sudo -i runs the owner's login shell from the
+# owner's home folder: that sets Homebrew's PATH and avoids a working folder
+# the owner can't read.
+# Usage: brew_install [--cask] <name>...
+function brew_install {
+    local what="$*"
+    what="${what#--cask }"
+    if [ -z "$BREW_OWNER" ]; then
+        # The checks after each install report it.
+        echo "  Can't install $what: Homebrew isn't installed" >&2
+    elif [ "$BREW_OWNER" = "$CURRENT_USER" ]; then
+        brew_safe install "$@"
+    elif [ "$IS_ADMIN" = true ]; then
+        sudo -u "$BREW_OWNER" -i "$BREW_PREFIX/bin/brew" install "$@"
+    else
+        echo "  Homebrew's output appears when it finishes, which can take a few minutes." >&2
+        admin_run "install $what with Homebrew (as $BREW_OWNER)" \
+            sudo -u "$BREW_OWNER" -i "$BREW_PREFIX/bin/brew" install "$@"
+    fi
+}
+
+# Hack Nerd Font, for accounts that don't own Homebrew (the cask only installs
+# fonts for Homebrew's owner). Same release the cask uses, checked by SHA-256.
+HACK_FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/Hack.tar.xz"
+HACK_FONT_SHA256="cdd389472e10e2261520140ff1b382b4f8a226af5fd0b2735b975d31151d9c3c"
+
+# Fonts are per account (~/Library/Fonts), or for everyone in /Library/Fonts.
+function has_hack_font {
+    ls "$HOME"/Library/Fonts/Hack*Nerd* &>/dev/null || ls /Library/Fonts/Hack*Nerd* &>/dev/null
+}
+
+function install_hack_font {
+    local tmp
+    tmp="$(mktemp -d)" || return 1
+    if curl -fsSL "$HACK_FONT_URL" -o "$tmp/Hack.tar.xz" && \
+       [ "$(shasum -a 256 "$tmp/Hack.tar.xz" | awk '{print $1}')" = "$HACK_FONT_SHA256" ]; then
+        mkdir -p "$HOME/Library/Fonts"
+        tar -xJf "$tmp/Hack.tar.xz" -C "$HOME/Library/Fonts" '*.ttf' || true
+    else
+        echo "  Could not download Hack Nerd Font, or its checksum didn't match"
+    fi
+    rm -rf "$tmp"
+}
+
+# uv and uvx from uv's GitHub release (UV_VERSION), into ~/.local/bin.
+function install_uv {
+    local arch sha tmp
+    case "$(uname -m)" in
+        arm64)  arch="aarch64"; sha="$UV_SHA256_AARCH64" ;;
+        x86_64) arch="x86_64";  sha="$UV_SHA256_X86_64" ;;
+        *)      echo "  No uv release for $(uname -m)"; return 0 ;;
+    esac
+    tmp="$(mktemp -d)" || return 1
+    if curl -fsSL "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$arch-apple-darwin.tar.gz" -o "$tmp/uv.tar.gz" && \
+       [ "$(shasum -a 256 "$tmp/uv.tar.gz" | awk '{print $1}')" = "$sha" ]; then
+        mkdir -p "$HOME/.local/bin"
+        tar -xzf "$tmp/uv.tar.gz" -C "$tmp" && \
+            install -m 755 "$tmp/uv-$arch-apple-darwin/uv" "$tmp/uv-$arch-apple-darwin/uvx" "$HOME/.local/bin/" || true
+    else
+        echo "  Could not download uv $UV_VERSION, or its checksum didn't match"
+    fi
+    rm -rf "$tmp"
+}
+
 # Pull the RecoveryKey value out of an fdesetup plist.
 # Usage: extract_recovery_key <plist_text>
 function extract_recovery_key {
@@ -365,8 +488,21 @@ fi
 
 mkdir -p "$SETUP_HOME"
 
-echo "==> Some steps need admin rights. Enter your password once now:"
-sudo -v
+CURRENT_USER="$(id -un)"
+IS_ADMIN=false
+if is_admin; then IS_ADMIN=true; fi
+# Decided once here: a caller's redirect (>/dev/null) must not change it later.
+INTERACTIVE=false
+if is_interactive; then INTERACTIVE=true; fi
+
+if [ "$IS_ADMIN" = true ]; then
+    echo "==> Some steps need admin rights. Enter your password once now:"
+    sudo -v
+else
+    echo "==> $CURRENT_USER is a standard account (not an administrator)."
+    echo "  Steps that need an administrator open a macOS window asking for an"
+    echo "  administrator's name and password. Steps already done are only checked."
+fi
 
 ###########################
 #   HOMEBREW              #
@@ -376,11 +512,16 @@ echo "==> Installing Homebrew..."
 # Check the install locations too: on a re-run brew may be installed but not on
 # this script's PATH yet, since bash doesn't read ~/.zprofile.
 if ! command -v brew &>/dev/null && [ ! -x /opt/homebrew/bin/brew ] && [ ! -x /usr/local/bin/brew ]; then
-    # Download to a temp file first so a cut-off download is never executed.
-    BREW_INSTALLER="$(mktemp)"
-    curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$BREW_INSTALLER"
-    /bin/bash "$BREW_INSTALLER"
-    rm -f "$BREW_INSTALLER"
+    if [ "$IS_ADMIN" = true ]; then
+        # Download to a temp file first so a cut-off download is never executed.
+        BREW_INSTALLER="$(mktemp)"
+        curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$BREW_INSTALLER"
+        /bin/bash "$BREW_INSTALLER"
+        rm -f "$BREW_INSTALLER"
+    else
+        # The installer needs sudo, and Homebrew belongs to whoever installs it.
+        manual "Homebrew isn't installed. Install it from an administrator account (https://brew.sh), then re-run this script."
+    fi
 fi
 
 # Apple Silicon installs to /opt/homebrew, Intel to /usr/local.
@@ -390,12 +531,23 @@ else
     BREW_PREFIX="/usr/local"
 fi
 
-append_line "eval \"\$(${BREW_PREFIX}/bin/brew shellenv)\"" "$HOME/.zprofile"
-eval "$("${BREW_PREFIX}/bin/brew" shellenv)"
-
-brew update
-# Warnings from brew doctor are common and not fatal.
-brew doctor || true
+# Homebrew belongs to the account that installed it. Other accounts use what's
+# installed, and brew_install installs anything missing as the owner. Empty
+# when Homebrew isn't installed (/usr/local alone belongs to root).
+BREW_OWNER=""
+if [ -x "$BREW_PREFIX/bin/brew" ]; then
+    append_line "eval \"\$(${BREW_PREFIX}/bin/brew shellenv)\"" "$HOME/.zprofile"
+    eval "$("${BREW_PREFIX}/bin/brew" shellenv)"
+    BREW_OWNER="$(stat -f %Su "$("$BREW_PREFIX/bin/brew" --repository)" 2>/dev/null || true)"
+    [ "$BREW_OWNER" != root ] || BREW_OWNER=""
+fi
+if [ "$BREW_OWNER" = "$CURRENT_USER" ]; then
+    brew update
+    # Warnings from brew doctor are common and not fatal.
+    brew doctor || true
+elif [ -n "$BREW_OWNER" ]; then
+    info "Homebrew belongs to $BREW_OWNER, so anything missing is installed as $BREW_OWNER"
+fi
 
 verify_cmd brew
 
@@ -444,13 +596,13 @@ echo "==> Installing 1Password and 1Password CLI..."
 # The cask fails if the app was installed outside Homebrew (e.g. downloaded), so
 # check for the app on disk first.
 if [ ! -d "/Applications/1Password.app" ]; then
-    brew_safe install --cask 1password
+    brew_install --cask 1password
 else
     echo "  1Password.app already installed"
 fi
 
 if ! command -v op &>/dev/null; then
-    brew_safe install --cask 1password-cli
+    brew_install --cask 1password-cli
 fi
 
 verify_dir "/Applications/1Password.app"
@@ -539,33 +691,40 @@ case "$FV_STATUS" in
         manual "FileVault turns on at your next logout (set up by an older version of this script). Log out and back in, then re-run to move the recovery key into 1Password."
         ;;
     *)
-        echo "  FileVault is off. Turning it on now."
-        echo "  Enter your macOS login password when asked (typing may not show), then"
-        echo "  approve the 'fdesetup would like to enable FileVault' window (it may open behind this one)."
-        # Not deferred: the recovery key comes back right away on stdout, so it
-        # can go straight to 1Password without ever being written to disk.
-        FV_PLIST="$(sudo fdesetup enable -user "$USER" -outputplist)"
-        FV_KEY="$(extract_recovery_key "${FV_PLIST:-}")"
-        if [[ $FV_KEY =~ $FV_KEY_REGEX ]]; then
-            if [ "$OP_READY" = true ] && op_store_password "$FILEVAULT_ITEM_TITLE" "$FV_KEY"; then
-                pass "FileVault is on; recovery key saved to 1Password ($OP_VAULT / $FILEVAULT_ITEM_TITLE)"
-            else
-                # 1Password isn't ready: keep the key in an owner-only file so the
-                # next run can move it into 1Password (see above).
-                (umask 077; mkdir -p "$FV_LEGACY_DIR"; printf '%s\n' "$FV_PLIST" > "$FV_LEGACY_KEY")
-                manual "FileVault is on, but its recovery key is in ~/.filevault/recovery_key.plist (only you can read it). Sign in to 1Password and re-run to move it there."
-            fi
-        elif [ -n "${FV_PLIST:-}" ]; then
-            # fdesetup returned something we couldn't parse. Never discard it:
-            # it may hold the only copy of the recovery key.
-            (umask 077; mkdir -p "$FV_LEGACY_DIR"; printf '%s\n' "$FV_PLIST" > "$FV_LEGACY_KEY")
-            fail "Could not read the FileVault recovery key from fdesetup's output"
-            manual "fdesetup's output is saved in ~/.filevault/recovery_key.plist (only you can read it). Copy the recovery key into 1Password and delete the file, or make a new key with 'sudo fdesetup changerecovery -personal'."
+        if [ "$IS_ADMIN" != true ]; then
+            # fdesetup asks for the password of the account it enables in this
+            # terminal, which an administrator's window can't answer.
+            fail "FileVault is off, and turning it on needs an administrator account"
+            manual "Turn on FileVault: run this script from an administrator account, or turn it on in System Settings > Privacy & Security > FileVault and save the recovery key in 1Password as '$FILEVAULT_ITEM_TITLE'."
         else
-            fail "Could not turn on FileVault"
-            manual "Turn on FileVault in System Settings > Privacy & Security and save the recovery key in 1Password."
+            echo "  FileVault is off. Turning it on now."
+            echo "  Enter your macOS login password when asked (typing may not show), then"
+            echo "  approve the 'fdesetup would like to enable FileVault' window (it may open behind this one)."
+            # Not deferred: the recovery key comes back right away on stdout, so it
+            # can go straight to 1Password without ever being written to disk.
+            FV_PLIST="$(sudo fdesetup enable -user "$USER" -outputplist)"
+            FV_KEY="$(extract_recovery_key "${FV_PLIST:-}")"
+            if [[ $FV_KEY =~ $FV_KEY_REGEX ]]; then
+                if [ "$OP_READY" = true ] && op_store_password "$FILEVAULT_ITEM_TITLE" "$FV_KEY"; then
+                    pass "FileVault is on; recovery key saved to 1Password ($OP_VAULT / $FILEVAULT_ITEM_TITLE)"
+                else
+                    # 1Password isn't ready: keep the key in an owner-only file so the
+                    # next run can move it into 1Password (see above).
+                    (umask 077; mkdir -p "$FV_LEGACY_DIR"; printf '%s\n' "$FV_PLIST" > "$FV_LEGACY_KEY")
+                    manual "FileVault is on, but its recovery key is in ~/.filevault/recovery_key.plist (only you can read it). Sign in to 1Password and re-run to move it there."
+                fi
+            elif [ -n "${FV_PLIST:-}" ]; then
+                # fdesetup returned something we couldn't parse. Never discard it:
+                # it may hold the only copy of the recovery key.
+                (umask 077; mkdir -p "$FV_LEGACY_DIR"; printf '%s\n' "$FV_PLIST" > "$FV_LEGACY_KEY")
+                fail "Could not read the FileVault recovery key from fdesetup's output"
+                manual "fdesetup's output is saved in ~/.filevault/recovery_key.plist (only you can read it). Copy the recovery key into 1Password and delete the file, or make a new key with 'sudo fdesetup changerecovery -personal'."
+            else
+                fail "Could not turn on FileVault"
+                manual "Turn on FileVault in System Settings > Privacy & Security and save the recovery key in 1Password."
+            fi
+            unset FV_PLIST FV_KEY
         fi
-        unset FV_PLIST FV_KEY
         ;;
 esac
 
@@ -586,10 +745,10 @@ function stealth_on {
 }
 
 if ! firewall_on; then
-    sudo "$FW" --setglobalstate on >/dev/null
+    admin_run "turn on the firewall" "$FW" --setglobalstate on >/dev/null
 fi
 if ! stealth_on; then
-    sudo "$FW" --setstealthmode on >/dev/null
+    admin_run "turn on the firewall's stealth mode" "$FW" --setstealthmode on >/dev/null
 fi
 
 if firewall_on; then pass "Firewall is on"; else fail "Firewall is NOT on"; fi
@@ -638,9 +797,20 @@ unset ICLOUD_ACCOUNTS
 ###########################
 echo "==> Installing core brew packages..."
 
+# One install for everything missing, so a standard account is asked for an
+# administrator only once.
+BREW_MISSING=()
 for pkg in "${BREW_FORMULAE[@]}"; do
-    brew_safe list --formula "$pkg" &>/dev/null || brew_safe install "$pkg"
+    brew_safe list --formula "$pkg" &>/dev/null || BREW_MISSING+=("$pkg")
 done
+if [ "${#BREW_MISSING[@]}" -gt 0 ]; then
+    brew_install "${BREW_MISSING[@]}"
+fi
+# A uv that's already here (Homebrew's, or one updated with uv self update)
+# is left as is.
+if ! command -v uv &>/dev/null; then
+    install_uv
+fi
 
 verify_cmd cmake
 verify_cmd vim
@@ -657,13 +827,16 @@ verify_cmd shellcheck
 
 echo "==> Installing fonts..."
 # Hack Nerd Font gives Terminal and Vim their powerline symbols and icons.
-# The cask fails if the font was installed by hand, so check for it first.
-if ! brew_safe list --cask font-hack-nerd-font &>/dev/null && \
-   ! ls "$HOME"/Library/Fonts/Hack*Nerd* &>/dev/null; then
+# The cask fails if the font was installed by hand, so check for it first. It
+# installs fonts for Homebrew's owner only, so other accounts download it.
+if has_hack_font; then
+    echo "  Hack Nerd Font already installed"
+elif [ "$BREW_OWNER" = "$CURRENT_USER" ] && ! brew_safe list --cask font-hack-nerd-font &>/dev/null; then
     brew_safe install --cask font-hack-nerd-font
 else
-    echo "  Hack Nerd Font already installed"
+    install_hack_font
 fi
+if has_hack_font; then pass "Hack Nerd Font is installed"; else fail "Hack Nerd Font is NOT installed"; fi
 
 ###########################
 #   CLAUDE APPS           #
@@ -676,7 +849,7 @@ echo "==> Installing the Claude desktop app and Google Chrome..."
 # so check for the app on disk first.
 CLAUDE_APP_NEW=false
 if [ ! -d "/Applications/Claude.app" ]; then
-    brew_safe install --cask claude
+    brew_install --cask claude
     CLAUDE_APP_NEW=true
 else
     echo "  Claude.app already installed"
@@ -687,7 +860,7 @@ if [ "$CLAUDE_APP_NEW" = true ] && [ -d "/Applications/Claude.app" ]; then
 fi
 
 if [ ! -d "/Applications/Google Chrome.app" ]; then
-    brew_safe install --cask google-chrome
+    brew_install --cask google-chrome
 else
     echo "  Google Chrome already installed"
 fi
@@ -724,7 +897,7 @@ fi
 if [ "$KEEP_AWAKE" != "1" ]; then
     info "$KEEP_AWAKE_SKIP"
 else
-    [ "$(pmset_value sleep)" = "0" ] || sudo pmset -a sleep 0
+    [ "$(pmset_value sleep)" = "0" ] || admin_run "turn off system sleep" pmset -a sleep 0
     if [ "$(pmset_value sleep)" = "0" ]; then
         pass "System sleep is off (pmset sleep 0)"
     else
@@ -732,7 +905,7 @@ else
     fi
     # Only desktops have this setting; laptops don't list it.
     if [ -n "$(pmset_value autorestart)" ]; then
-        [ "$(pmset_value autorestart)" = "1" ] || sudo pmset -a autorestart 1
+        [ "$(pmset_value autorestart)" = "1" ] || admin_run "start the Mac again after a power cut" pmset -a autorestart 1
         if [ "$(pmset_value autorestart)" = "1" ]; then
             pass "The Mac starts again after a power cut (pmset autorestart 1)"
         else
@@ -741,10 +914,11 @@ else
     fi
 
     # Amphetamine is only on the Mac App Store. mas gets it when you're
-    # signed in to the App Store (it asks for your password via sudo).
+    # signed in to the App Store (it asks for your password via sudo, so a
+    # standard account installs it from the App Store instead).
     AMPHETAMINE_NEW=false
-    if [ ! -d "/Applications/Amphetamine.app" ]; then
-        command -v mas &>/dev/null || brew_safe install mas
+    if [ ! -d "/Applications/Amphetamine.app" ] && [ "$IS_ADMIN" = true ]; then
+        command -v mas &>/dev/null || brew_install mas
         if command -v mas &>/dev/null && mas get "$AMPHETAMINE_APP_ID"; then
             AMPHETAMINE_NEW=true
         fi
@@ -755,8 +929,10 @@ else
             # Its settings can't be scripted. pmset already keeps the Mac awake.
             manual "In Amphetamine's settings, have it start a session when it launches, set to Indefinitely. The script opens it at login."
         fi
-    else
+    elif [ "$IS_ADMIN" = true ]; then
         manual "Install Amphetamine: sign in to the App Store, then re-run (or get it from https://apps.apple.com/app/amphetamine/id$AMPHETAMINE_APP_ID)."
+    else
+        manual "Install Amphetamine from the App Store (a standard account can't install it with mas): https://apps.apple.com/app/amphetamine/id$AMPHETAMINE_APP_ID. Then set it to start a session when it launches, Indefinitely."
     fi
 
     # Open Claude and Amphetamine at every login. A LaunchAgent needs no
@@ -1165,6 +1341,9 @@ if [ "$AI_READY" = true ]; then
         else
             fail "Could not turn on the hourly ~/Developer/ai sync (scripts/install-sync.sh)"
         fi
+    else
+        # Not in this copy, so not on GitHub either when the copy is current.
+        manual "~/Developer/ai has no scripts/install-sync.sh, so its hourly GitHub sync isn't on. Once the ai repo on GitHub has it, re-run this script."
     fi
 fi
 
@@ -1344,6 +1523,10 @@ if [ "$AI_READY" != true ]; then
     info "Skipped: ~/Developer/ai isn't here yet"
 elif [ "$AI_NEEDS_SYNC" != true ] && launchctl print "gui/$(id -u)/$AI_SYNC_LABEL" >/dev/null 2>&1 && [ ! -s "$HOME/Library/Logs/ai-sync.last" ]; then
     pass "~/Developer/ai syncs with GitHub hourly"
+elif [ "$AI_NEEDS_SYNC" != true ] && [ ! -x "$AI_DIR/scripts/install-sync.sh" ]; then
+    # The AI repo step already listed it. Claude can't turn on a sync job
+    # whose installer isn't in the repo, so it isn't started for this.
+    info "Skipped: ~/Developer/ai has no scripts/install-sync.sh yet"
 else
     AI_SYNC_PENDING=true
     # ai_repo_pull already said how when the copy needs a merge.

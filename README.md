@@ -17,22 +17,24 @@ Skip the Claude app and Chrome: the script installs both.
 
 ### 2. Install Claude Code and get this repo
 
-In Terminal, install Apple's Command Line Tools (for git). Click **Install** in the window that opens and wait for it to finish:
+In Terminal, install Apple's Command Line Tools (for git). Click **Install** in the window that opens and wait for it to finish. If it says they're already installed, carry on:
 
 ```sh
 xcode-select --install
 ```
 
-Then:
+Install Claude Code:
 
 ```sh
-# Claude Code
 curl -fsSL https://claude.ai/install.sh | bash
 grep -qs '.local/bin' ~/.zprofile || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 export PATH="$HOME/.local/bin:$PATH"
 claude --version
+```
 
-# This repo. It's public, so no SSH key is needed yet.
+Get this repo. It's public, so no SSH key is needed yet:
+
+```sh
 mkdir -p ~/Developer
 git clone https://github.com/JoseBarrios/setup-os.git ~/Developer/setup-os
 ```
@@ -48,19 +50,19 @@ Log in when the browser opens, then type **Set up this Mac**. Claude follows [`C
 
 ### 4. Run the setup script with Claude
 
-Claude can't type passwords, so you run the script in a second Terminal tab (⌘T) while Claude explains each prompt and fixes anything that fails:
+Claude can't type passwords, so you run the script in a second Terminal tab (⌘T) while Claude explains each prompt and fixes anything that fails. `script` saves everything it shows to a log in `~/setup/logs`, so Claude reads the log instead of you pasting output:
 
 ```sh
-~/Developer/setup-os/os/mac/osx.sh
+mkdir -p ~/setup/logs && script -q -F ~/setup/logs/osx-$(date +%Y%m%d-%H%M%S).log ~/Developer/setup-os/os/mac/osx.sh
 ```
 
 Once your SSH key is on GitHub, the script pulls `~/Developer/ai` (private, so over SSH), turns on its hourly GitHub sync, and sets up Claude Code from it: every session follows its `AGENTS.md`, and your skills install as a plugin. `private/` in that repo isn't in git, so copy anything you need from it from another Mac.
 
-On a desktop Mac like a Mac mini, it also turns sleep off, installs Amphetamine and opens the Claude app at login, so Claude on your phone can always reach this Mac. After a restart, log in on the Mac to bring Claude back: FileVault turns off automatic login.
+On a desktop Mac like a Mac mini, it also turns sleep off, installs Amphetamine (on an administrator account) and opens the Claude app at login, so Claude on your phone can always reach this Mac. After a restart, log in on the Mac to bring Claude back: FileVault turns off automatic login.
 
 At the Advanced Data Protection prompt, press Enter and turn it on; it doesn't restart the Mac. If an ai repo sync prompt appears, press Enter: Claude Code syncs `~/Developer/ai` with GitHub in that tab; type `/exit` when it's done. At the Lockdown Mode prompt, type `s` for now: turning it on restarts the Mac. After the script, Claude checks everything and lists what's left, such as signing in to the Claude app, adding Claude in Chrome and setting up Amphetamine.
 
-Last, run the script again and press Enter at the Lockdown Mode step. After the restart, run it once more: it should end with **ALL CHECKS PASSED** and nothing under **Still needs you**.
+Last, run the script again the same way and press Enter at the Lockdown Mode step. After the restart, run it once more: it should end with **ALL CHECKS PASSED** and nothing under **Still needs you**.
 
 ## Already set up
 
