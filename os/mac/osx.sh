@@ -644,6 +644,10 @@ if [ "$OP_READY" = true ]; then
     fi
     if [ -n "$OP_VAULT" ] && op vault get "$OP_VAULT" &>/dev/null; then
         pass "1Password CLI is signed in (vault: $OP_VAULT)"
+    elif ! op vault list &>/dev/null; then
+        # whoami can pass while 1Password is locked or refuses this terminal.
+        fail "1Password CLI can't read your vaults. Unlock 1Password, approve its prompt for this terminal, then re-run."
+        OP_READY=false
     else
         fail "No 1Password vault named Personal, Private or Employee. Re-run with OP_VAULT=<vault name>."
         OP_READY=false
@@ -1200,6 +1204,9 @@ if [ -n "$SSH_PUBKEY" ]; then
     verify_git_config "gpg.ssh.allowedSignersFile" "$ALLOWED_SIGNERS"
     verify_git_config "commit.gpgsign" "true"
     verify_git_config "tag.gpgsign" "true"
+elif [ -n "$(git config --global user.signingkey 2>/dev/null || true)" ]; then
+    # Set up by an earlier run; it just can't be checked without 1Password.
+    manual "Commit signing wasn't checked, since the 1Password CLI isn't ready. Re-run once it is."
 else
     manual "Commit signing is not set up (no SSH key from 1Password yet). Re-run after signing in to 1Password."
 fi

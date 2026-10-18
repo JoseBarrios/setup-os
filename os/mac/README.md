@@ -27,7 +27,7 @@ Steps run in this order.
 | Homebrew | Installs Homebrew (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) and adds it to `~/.zprofile`. Installs it only from an administrator account, and runs `brew update` only from the account that owns it. |
 | Oh My Zsh | Installed before anything else writes to `~/.zshrc`, because its installer replaces that file. |
 | Claude Code | Installed early (native installer, `~/.local/bin/claude`, updates itself) so it can debug failures in the rest of the run. |
-| 1Password | Installs the app and CLI (`op`). If the CLI isn't signed in, the script pauses and asks you to sign in and turn on **Settings > Developer > Integrate with 1Password CLI** and **Use the SSH agent**. |
+| 1Password | Installs the app and CLI (`op`). If the CLI isn't signed in, the script pauses and asks you to sign in and turn on **Settings > Developer > Integrate with 1Password CLI** and **Use the SSH agent**. If it's signed in but can't read your vaults (1Password is locked, or refused this terminal), the check fails and asks you to unlock 1Password and re-run; the SSH key and signing checks wait for that. |
 | Disk encryption | Turns on FileVault full-disk encryption and reports progress while the disk encrypts. The recovery key goes straight into 1Password as `FileVault Recovery Key - <host>` and is never written to disk. If 1Password isn't ready, it is kept in `~/.filevault/recovery_key.plist` (owner-only) and moved into 1Password on the next run. On a standard account it only checks; turning it on needs an administrator account. |
 | Firewall | Turns on the application firewall and stealth mode. |
 | Lockdown Mode | Checks whether it's on. If not, it's turned on as the very last step (see below). |
