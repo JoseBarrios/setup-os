@@ -122,9 +122,9 @@ Plugin 'voldikss/vim-floaterm'
 
 " AI:
 """"""""""""""""""
-" Claude Code — interactive AI assistant inside Vim via floaterm.
+" Claude Code: interactive AI assistant inside Vim via floaterm.
 " Requires: claude CLI installed and authenticated.
-" No third-party Vim plugins needed — uses the already-installed floaterm.
+" No third-party Vim plugins needed: it uses the already-installed floaterm.
 
 " All of your Plugins must be added before the following line
 call vundle#end()            " required
@@ -396,16 +396,22 @@ let g:floaterm_height = 0.90
 " <Leader>cc opens a new Claude session in the current working directory.
 " <Leader>cr resumes the most recent Claude conversation (--continue).
 " <Leader>cs sends the visually selected text to Claude as a prompt.
-nnoremap <silent> <Leader>cc :FloatermNew --title=Claude\ Code --autoclose=2 claude<CR>
-nnoremap <silent> <Leader>cr :FloatermNew --title=Claude\ Code --autoclose=2 claude --continue<CR>
+nnoremap <silent> <Leader>cc :FloatermNew --title=Claude\ Code --autoclose=always claude<CR>
+nnoremap <silent> <Leader>cr :FloatermNew --title=Claude\ Code --autoclose=always claude --continue<CR>
 
 " Send visual selection to Claude: yanks selection, opens Claude with it as a prompt.
 " Uses --print for non-interactive single-shot output in a floating terminal.
-vnoremap <silent> <Leader>cs y:FloatermNew --title=Claude\ Code --autoclose=0 claude --print <C-R>"<CR>
+" The command goes to floaterm as a list, so the whole selection is one
+" argument after --, and floaterm never splits or expands it.
+function! s:ClaudeAskSelection() abort
+  call floaterm#terminal#open(-1, ['claude', '--print', '--', @"], {}, {'title': 'Claude Code', 'autoclose': 'never'})
+endfunction
+vnoremap <silent> <Leader>cs y:<C-u>call <SID>ClaudeAskSelection()<CR>
 
 " Ask Claude about the current file without leaving Vim.
 " Opens Claude in the project directory with the current filename as context.
-nnoremap <silent> <Leader>cf :FloatermNew --title=Claude\ Code --autoclose=2 claude "Review the file: <C-R>=expand('%:p')<CR>"<CR>
+" Passed as a list too, so the file name arrives as one intact argument.
+nnoremap <silent> <Leader>cf :call floaterm#terminal#open(-1, ['claude', 'Review the file: ' . expand('%:p')], {}, {'title': 'Claude Code', 'autoclose': 'always'})<CR>
 
 "------------------------------------------------------------------------
 "  PYTHON SETTINGS:
