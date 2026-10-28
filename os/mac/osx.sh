@@ -593,6 +593,17 @@ verify_git_config "user.name" "JoseBarrios"
 verify_git_config "user.email" "github@barrios.io"
 
 ###########################
+#   CLAUDE + AI REPO      #
+###########################
+# Make ~/Developer/ai (Jose's "ai" repo: skills, scheduled task prompts, local MCP servers,
+# standing instructions) the default folder for Claude on this Mac. The separate script clones
+# the repo, hardens the clone, points Claude Code at it (instructions import, file access,
+# skills plugin) and adds the `ai` shell command. Runs after gh, git and the global git
+# identity are in place because the clone and the repo's own setup depend on them.
+echo "==> Running Claude setup..."
+/bin/bash "$REPO_ROOT/app/claude/claude-setup.sh"
+
+###########################
 #   NVM                   #
 ###########################
 # NVM (Node Version Manager) allows installing and switching between Node.js versions.
