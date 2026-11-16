@@ -43,7 +43,7 @@ Steps run in this order.
 | GitHub | Logs in with `gh`, adds GitHub's host keys to `known_hosts` (fetched over HTTPS), and uploads the public key as both an authentication key and a signing key. |
 | Tests | Runs `ssh -T git@github.com` and makes a signed test commit, then verifies it. |
 | This repo over SSH | A new Mac clones this repo over HTTPS. Once SSH to GitHub works, its remote is switched to `git@github.com:JoseBarrios/setup-os.git` so you can push. |
-| AI repo | Clones `~/Developer/ai` over SSH, or brings the copy that's there up to date, runs its `scripts/setup.sh`, then turns on its hourly GitHub sync. See [The AI repo](#the-ai-repo). |
+| AI repo | Clones `~/Developer/ai` over SSH, or brings the copy that's there up to date, runs its `scripts/setup.sh` and its `observability/install.sh` (the agent audit log: collector, Claude Code hooks, Hermes plugin), then turns on its hourly GitHub sync. See [The AI repo](#the-ai-repo). |
 | Claude Code config | Merges secret deny rules into `~/.claude/settings.json` and lets Claude Code read `~/Developer/ai` from any folder, makes every session follow `~/Developer/ai/AGENTS.md`, installs your skills as the `jose-skills` plugin, and adds an `ai` shell command. See [Claude Code](#claude-code). Also checks that Claude Code is logged in. |
 | Terminal | Imports Solarized Dark and sets it as the default profile, with Hack Nerd Font Mono 14pt. |
 | Finder | Shows hidden files. |

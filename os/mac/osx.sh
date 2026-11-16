@@ -1375,6 +1375,16 @@ if [ "$AI_READY" = true ]; then
             fail "~/Developer/ai/scripts/setup.sh failed"
         fi
     fi
+    # The agent audit log (observability/): the per-Mac collector LaunchAgent,
+    # the Claude Code hooks and the Hermes plugin. Safe to re-run. Shipping to
+    # Atlas is turned on separately with its atlas/setup_access.sh (1Password).
+    if [ -x "$AI_DIR/observability/install.sh" ]; then
+        if "$AI_DIR/observability/install.sh" >/dev/null; then
+            pass "Set up the agent audit log (~/Developer/ai/observability/install.sh)"
+        else
+            fail "~/Developer/ai/observability/install.sh failed"
+        fi
+    fi
     # Its pre-commit hook scans every commit for secrets. Set here too, for a
     # copy without scripts/setup.sh.
     git -C "$AI_DIR" config core.hooksPath scripts/hooks
